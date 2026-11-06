@@ -2,3 +2,4 @@
 samples/
 node_modules/
 .vercel/
+._*
