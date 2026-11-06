@@ -199,6 +199,22 @@ function renderPanel() {
 }
 
 let anchorInput = null, anchorOut = null;
+let autoInput = null, calibRefs = null, calibInfo = null;
+
+// show the current (possibly auto-fitted) light speed and walking scale in the panel
+function syncCalibration() {
+  if (!calibRefs) return;
+  const [ci, co] = calibRefs.c, [si, so] = calibRefs.spm;
+  if (document.activeElement !== ci) { ci.value = model.c; co.textContent = `${model.c.toFixed(2)} m/s`; }
+  if (document.activeElement !== si) { si.value = model.secondsPerMeter; so.textContent = `${model.secondsPerMeter.toFixed(2)} s`; }
+  const cal = model.calib;
+  if (calibInfo && cal) {
+    calibInfo.textContent = `场景纵深 ${cal.R.toFixed(1)} m · 可走范围约 ${cal.range.toFixed(1)} m · 步速 ${model.speedEst.toFixed(2)} m/s` +
+      (model.auto ? '' : '（手动）');
+  }
+}
+
+const defaultPace = () => (matchMedia('(pointer: coarse)').matches ? 0.8 : 1.2);
 
 function selectRow(label, options, current, onChange) {
   const row = document.createElement('div');
@@ -224,12 +240,36 @@ function renderVideoControls() {
   panel.appendChild(selectRow('此刻怎么前进', DRIVERS, model.driver, (v) => { model.driver = v; }));
   panel.appendChild(selectRow('走到尽头', END_MODES, model.endMode, (v) => { model.endMode = v; }));
 
-  panel.appendChild(sliderRow({ label: '世界光速', min: 0.5, max: 10, step: 0.1, unit: ' m/s' }, model.c, (v) => {
+  const autoRow = document.createElement('div');
+  autoRow.className = 'checks';
+  const autoBox = checkbox('按场景深度自动校准', model.auto, (on) => {
+    model.auto = on;
+    if (on) model.recalibrate();
+    syncCalibration();
+  });
+  autoRow.appendChild(autoBox);
+  panel.appendChild(autoRow);
+  autoInput = autoBox.querySelector('input');
+
+  const cRow = sliderRow({ label: '世界光速', min: 0.3, max: 10, step: 0.05, unit: ' m/s' }, model.c, (v) => {
     model.c = v;
-  }));
-  panel.appendChild(sliderRow({ label: '每走 1 米，此刻前进', min: 0.1, max: 4, step: 0.1, unit: ' s' }, model.secondsPerMeter, (v) => {
+    model.auto = false;
+    autoInput.checked = false;
+  });
+  const spmRow = sliderRow({ label: '每走 1 米，此刻前进', min: 0.1, max: 4, step: 0.05, unit: ' s' }, model.secondsPerMeter, (v) => {
     model.secondsPerMeter = v;
-  }));
+    model.auto = false;
+    autoInput.checked = false;
+  });
+  calibRefs = {
+    c: [cRow.querySelector('input'), cRow.querySelector('output')],
+    spm: [spmRow.querySelector('input'), spmRow.querySelector('output')],
+  };
+  panel.append(cRow, spmRow);
+  calibInfo = document.createElement('div');
+  calibInfo.className = 'stats';
+  panel.appendChild(calibInfo);
+  syncCalibration();
 
   const dur = state.clip ? state.clip.duration : 1;
   const row = sliderRow({ label: '此刻', min: 0, max: dur, step: 0.01, unit: ' s' }, model.t0, (v) => {
@@ -283,6 +323,7 @@ viewer.onTick = (dt, pos) => {
   if (hudClock < 0.1) return;
   hudClock = 0;
   tstatEl.textContent = `v ${observer.speed.toFixed(2)} m/s · β ${model.beta.toFixed(2)} · 此刻 ${model.t0.toFixed(1)} / ${model.duration.toFixed(1)} s`;
+  if (!panel.classList.contains('hidden')) syncCalibration();
   if (anchorInput && !panel.classList.contains('hidden') && document.activeElement !== anchorInput) {
     anchorInput.value = model.t0;
     anchorOut.textContent = `${model.t0.toFixed(2)} s`;
@@ -484,6 +525,8 @@ function rebuild() {
       const tf = buildTimeField(state.clip, state.timeParams);
       const buildMs = performance.now() - t0;
       viewer.setTimeField(tf);
+      model.setDepthStats(tf.depthStats, model.depthStats ? undefined : defaultPace());
+      syncCalibration();
       const thumbs = state.clip.frames.map((f) => blurThumb(f, tf.width, tf.height));
       viewer.setBackground(thumbs.map((t) => t.data), thumbs[0].width, thumbs[0].height);
       for (const [k, on] of Object.entries(state.videoLayers)) viewer.setLayerVisible(k, on);
