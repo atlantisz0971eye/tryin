@@ -75,6 +75,9 @@ html, body {
   overflow: hidden;
 }
 .face.back { transform: rotateY(180deg); }
+/* only the face you are looking at can be clicked */
+.card:not(.flipped) .face.back,
+.card.flipped .face.front { pointer-events: none; }
 
 /* film grain over the whole print */
 .face::after {

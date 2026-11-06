@@ -591,6 +591,7 @@ const card = $('card');
 const desk = card.parentElement;
 const front = card.querySelector('.front'), back = card.querySelector('.back');
 let flipped = false;
+back.inert = true;
 
 function setFlipped(on) {
   if (on === flipped) return;
@@ -599,6 +600,10 @@ function setFlipped(on) {
   void desk.offsetWidth; // restart the lift animation
   desk.classList.add('turning');
   card.classList.toggle('flipped', on);
+  // The face turned away still takes clicks in some browsers even with backface-visibility hidden
+  // (the back's "turn back" sits right over the front's "tryin'"), so switch it off entirely.
+  front.inert = on;
+  back.inert = !on;
   front.setAttribute('aria-hidden', String(on));
   back.setAttribute('aria-hidden', String(!on));
   // the scene keeps running underneath; it just is not drawn while the back is up
