@@ -4,10 +4,11 @@
 const STRINGS = {
   en: {
     'doc.description': 'Turn any photo or short video into a frozen moment you can walk into. Everything stays on your device.',
-    'intro.lede': 'Freeze a moment, then walk into it.<br />With a video, time moves as you do.',
-    'drop.title': 'Choose or drop a photo or a short video',
-    'drop.sub': 'jpg / png / mp4 · videos use the first 10 s, keep the camera still',
-    'intro.fine': 'Everything is processed on your device and never uploaded.<br />The first visit downloads a 20–50 MB depth model, cached afterwards.',
+    'intro.lede': 'freeze a moment, then walk into it',
+    'drop.title': 'choose a photo or a short video',
+    'intro.fine': 'it never leaves your device',
+    'guide.home': 'back to<br />the start',
+    'guide.menu': 'turn it over<br /><small>settings · new photo</small>',
     'busy.ready': 'getting ready',
     'label.home': 'back to origin',
     'label.menuAria': 'Turn over: settings and new material',
@@ -102,10 +103,11 @@ const STRINGS = {
 
   zh: {
     'doc.description': '上传任意一张照片或一段短视频，把那一瞬间凝固成可以走进去的粒子空间。素材只在你的设备上处理。',
-    'intro.lede': '把一瞬间凝固下来，然后走进去。<br />如果是一段视频，你走动，时间就跟着走。',
-    'drop.title': '选择或拖入一张照片或一段短视频',
-    'drop.sub': 'jpg / png / mp4 · 视频取前 10 秒，镜头尽量别动',
-    'intro.fine': '素材只在你的设备上处理，不会上传到任何地方。<br />首次使用需要下载约 20–50 MB 的深度模型，之后会缓存。',
+    'intro.lede': '把一瞬间凝固下来，然后走进去',
+    'drop.title': '选一张照片或一段短视频',
+    'intro.fine': '素材不会离开你的设备',
+    'guide.home': '回到<br />原点',
+    'guide.menu': '翻过去<br /><small>设置 · 换素材</small>',
     'busy.ready': '准备中',
     'label.home': '回到原点',
     'label.menuAria': '翻到背面：参数与换素材',

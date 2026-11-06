@@ -26,13 +26,12 @@
           <section id="intro" class="overlay">
             <div class="intro-inner">
               <h1>tryin'</h1>
-              <p class="lede" data-i18n-html="intro.lede"></p>
+              <p class="lede" data-i18n="intro.lede"></p>
               <label id="drop" class="drop">
                 <input id="file" type="file" accept="image/*,video/*" hidden />
                 <span class="drop-title" data-i18n="drop.title"></span>
-                <span class="drop-sub" data-i18n="drop.sub"></span>
               </label>
-              <p class="fine" data-i18n-html="intro.fine"></p>
+              <p class="fine" data-i18n="intro.fine"></p>
             </div>
           </section>
 
@@ -65,6 +64,24 @@
               </div>
               <span class="hint" id="hint"></span>
             </div>
+          </div>
+        </div>
+
+        <!-- hand-drawn arrows from the picture down to the two corner labels -->
+        <div id="guide" class="on" aria-hidden="true">
+          <div class="guide-item guide-home">
+            <span class="guide-note" data-i18n-html="guide.home"></span>
+            <svg viewBox="0 0 64 84" focusable="false">
+              <path pathLength="1" d="M44 3C40 17 20 24 23 43C25 56 17 65 15 77" />
+              <path pathLength="1" d="M15 77C11 70 8 65 5 60M15 77C21 72 26 68 31 66" />
+            </svg>
+          </div>
+          <div class="guide-item guide-menu">
+            <span class="guide-note" data-i18n-html="guide.menu"></span>
+            <svg viewBox="0 0 64 84" focusable="false">
+              <path pathLength="1" d="M18 3C23 18 44 24 40 43C38 56 47 66 49 78" />
+              <path pathLength="1" d="M49 78C53 71 56 66 60 61M49 78C43 73 38 69 33 67" />
+            </svg>
           </div>
         </div>
 
