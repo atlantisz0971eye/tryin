@@ -7,6 +7,7 @@ import { TimeModel, PRESETS, DRIVERS, END_MODES } from './timemodel.js';
 import { blurThumb } from './glow.js';
 import { t as tr, getLang, setLang, onLangChange, applyStatic } from './i18n.js';
 import { drawDiagram } from './diagram.js';
+import { stabilizeFrames } from './stabilize.js';
 import { MotionWalker, motionSupported, requestMotionPermission } from './motion.js';
 
 const $ = (id) => document.getElementById(id);
@@ -561,6 +562,14 @@ async function processVideo() {
     });
     if (token !== state.loadToken) return;
 
+    // hand-held footage moves: put every frame into one camera so a static scene sits on the same
+    // pixels throughout, which the time field depends on
+    showBusy(tr('busy.steady', { i: 0, n: clip.frames.length - 1 }), 0);
+    await stabilizeFrames(clip, { fov: state.timeParams.fov }, (i, n) => {
+      if (token === state.loadToken) showBusy(tr('busy.steady', { i, n }), i / n);
+    });
+    if (token !== state.loadToken) return;
+
     showBusy(tr('busy.prepare'));
     const disparities = [];
     const t0 = performance.now();
@@ -844,4 +853,4 @@ const src = new URLSearchParams(location.search).get('src');
 if (src) loadMedia(src);
 
 // exposed for tinkering from the devtools console
-window.atom = { viewer, state, rebuild, model, observer };
+window.atom = { viewer, state, rebuild, model, observer, estimateDepth };
