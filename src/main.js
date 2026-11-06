@@ -5,6 +5,7 @@ import { extractFrames } from './video.js';
 import { Observer } from './observer.js';
 import { TimeModel, PRESETS, DRIVERS, END_MODES } from './timemodel.js';
 import { blurThumb } from './glow.js';
+import { t as tr, getLang, setLang, onLangChange, applyStatic } from './i18n.js';
 import { drawDiagram } from './diagram.js';
 
 const $ = (id) => document.getElementById(id);
@@ -61,7 +62,7 @@ function estimateDepth(width, height, rgba) {
 
 worker.onerror = (e) => {
   console.error(e);
-  showError('深度模型加载失败，请检查网络后刷新重试。');
+  showError(tr('err.model'));
 };
 
 worker.onmessage = (e) => {
@@ -71,7 +72,7 @@ worker.onmessage = (e) => {
     let loaded = 0, total = 0;
     for (const d of downloads.values()) { loaded += d.loaded; total += d.total; }
     if (loaded < total) {
-      showBusy(`下载深度模型 ${(loaded / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`, loaded / total);
+      showBusy(tr('busy.download', { a: (loaded / 1048576).toFixed(0), b: (total / 1048576).toFixed(0) }), loaded / total);
     }
   } else if (m.type === 'status') {
     state.device = m.device === 'webgpu' ? 'WebGPU' : 'CPU';
@@ -87,20 +88,20 @@ worker.onmessage = (e) => {
 // ---------------------------------------------------------------- panel
 
 const PHOTO_SLIDERS = [
-  { key: 'far', label: '远处距离', min: 4, max: 80, step: 1, unit: ' m' },
-  { key: 'near', label: '近处距离', min: 0.3, max: 6, step: 0.1, unit: ' m' },
-  { key: 'fov', label: '视场角', min: 30, max: 110, step: 1, unit: '°' },
-  { key: 'jump', label: '断裂阈值', min: 0.04, max: 0.4, step: 0.01, unit: '' },
-  { key: 'ash', label: '边缘灰烬', min: 0, max: 3, step: 0.1, unit: '' },
-  { key: 'smoke', label: '影中烟尘', min: 0, max: 3, step: 0.1, unit: '' },
-  { key: 'shadowTone', label: '影子明度', min: 0, max: 0.2, step: 0.01, unit: '' },
+  { key: 'far', label: 'far', min: 4, max: 80, step: 1, unit: ' m' },
+  { key: 'near', label: 'near', min: 0.3, max: 6, step: 0.1, unit: ' m' },
+  { key: 'fov', label: 'fov', min: 30, max: 110, step: 1, unit: '°' },
+  { key: 'jump', label: 'jump', min: 0.04, max: 0.4, step: 0.01, unit: '' },
+  { key: 'ash', label: 'ash', min: 0, max: 3, step: 0.1, unit: '' },
+  { key: 'smoke', label: 'smoke', min: 0, max: 3, step: 0.1, unit: '' },
+  { key: 'shadowTone', label: 'shadowTone', min: 0, max: 0.2, step: 0.01, unit: '' },
 ];
 
 const VIDEO_SLIDERS = [
-  { key: 'far', label: '远处距离', min: 4, max: 80, step: 1, unit: ' m' },
-  { key: 'near', label: '近处距离', min: 0.3, max: 6, step: 0.1, unit: ' m' },
-  { key: 'fov', label: '视场角', min: 30, max: 110, step: 1, unit: '°' },
-  { key: 'jump', label: '断裂阈值', min: 0.04, max: 0.4, step: 0.01, unit: '' },
+  { key: 'far', label: 'far', min: 4, max: 80, step: 1, unit: ' m' },
+  { key: 'near', label: 'near', min: 0.3, max: 6, step: 0.1, unit: ' m' },
+  { key: 'fov', label: 'fov', min: 30, max: 110, step: 1, unit: '°' },
+  { key: 'jump', label: 'jump', min: 0.04, max: 0.4, step: 0.01, unit: '' },
 ];
 
 function renderPanel() {
@@ -113,33 +114,33 @@ function renderPanel() {
     target[s.key] = v;
     scheduleRebuild();
   }));
-  panel.appendChild(sliderRow({ label: '粒子大小', min: 0.6, max: 3, step: 0.05, unit: '' }, state.sizeMul, (v) => {
+  panel.appendChild(sliderRow({ label: 'size', min: 0.6, max: 3, step: 0.05, unit: '' }, state.sizeMul, (v) => {
     state.sizeMul = v;
     viewer.setSizeMul(v);
   }));
-  panel.appendChild(sliderRow({ label: '闪光漂白', min: 0, max: 1, step: 0.05, unit: '' }, state.bleach, (v) => {
+  panel.appendChild(sliderRow({ label: 'bleach', min: 0, max: 1, step: 0.05, unit: '' }, state.bleach, (v) => {
     state.bleach = v;
     viewer.setBleach(v);
   }));
-  panel.appendChild(sliderRow({ label: '近处柔焦', min: 0, max: 1, step: 0.05, unit: '' }, state.softness, (v) => {
+  panel.appendChild(sliderRow({ label: 'soft', min: 0, max: 1, step: 0.05, unit: '' }, state.softness, (v) => {
     state.softness = v;
     viewer.setSoftness(v);
   }));
-  panel.appendChild(sliderRow({ label: '背景亮度', min: 0, max: 1.6, step: 0.05, unit: '' }, state.bgStrength, (v) => {
+  panel.appendChild(sliderRow({ label: 'bg', min: 0, max: 1.6, step: 0.05, unit: '' }, state.bgStrength, (v) => {
     state.bgStrength = v;
     viewer.setBackgroundStrength(v);
   }));
-  panel.appendChild(sliderRow({ label: '边缘融合', min: 0, max: 0.35, step: 0.01, unit: '' }, state.feather, (v) => {
+  panel.appendChild(sliderRow({ label: 'feather', min: 0, max: 0.35, step: 0.01, unit: '' }, state.feather, (v) => {
     state.feather = v;
     viewer.setFeather(v);
   }));
   const imm = document.createElement('div');
   imm.className = 'checks';
-  imm.appendChild(checkbox('沉浸背景（边缘渐隐）', state.immersive, (on) => {
+  imm.appendChild(checkbox('immersive', state.immersive, (on) => {
     state.immersive = on;
     viewer.setImmersive(on);
   }));
-  imm.appendChild(checkbox('移动时自动正对画面', state.assist, (on) => {
+  imm.appendChild(checkbox('assist', state.assist, (on) => {
     state.assist = on;
     viewer.setAssist(on);
   }));
@@ -147,7 +148,7 @@ function renderPanel() {
 
   const res = document.createElement('div');
   res.className = 'row';
-  res.innerHTML = '<label><span>精度（粒子数）</span></label>';
+  res.innerHTML = `<label><span>${tr('res')}</span></label>`;
   const sel = document.createElement('select');
   const options = state.mode === 'video' ? [256, 384, 480, 640] : [384, 512, 640, 800, 1024];
   const current = state.mode === 'video' ? state.videoResolution : state.resolution;
@@ -155,7 +156,7 @@ function renderPanel() {
   for (const r of options) {
     const o = document.createElement('option');
     o.value = r;
-    o.textContent = `${r} px` + (r === def ? '（默认）' : r > def ? '（电脑）' : '');
+    o.textContent = `${r} px` + (r === def ? tr('res.default') : r > def ? tr('res.desktop') : '');
     if (r === current) o.selected = true;
     sel.appendChild(o);
   }
@@ -174,7 +175,7 @@ function renderPanel() {
   const checks = document.createElement('div');
   checks.className = 'checks';
   if (state.mode === 'video') {
-    const names = { frames: '当下', plate: '别处时刻' };
+    const names = { frames: 'layer.frames', plate: 'layer.plate' };
     for (const [k, label] of Object.entries(names)) {
       checks.appendChild(checkbox(label, state.videoLayers[k], (on) => {
         state.videoLayers[k] = on;
@@ -182,14 +183,14 @@ function renderPanel() {
       }));
     }
   } else {
-    const names = { photo: '照片', shadow: '影子', ash: '灰烬' };
+    const names = { photo: 'layer.photo', shadow: 'layer.shadow', ash: 'layer.ash' };
     for (const [k, label] of Object.entries(names)) {
       checks.appendChild(checkbox(label, state.layers[k], (on) => {
         state.layers[k] = on;
         viewer.setLayerVisible(k, on);
       }));
     }
-    checks.appendChild(checkbox('微光', state.shimmer, (on) => {
+    checks.appendChild(checkbox('shimmer', state.shimmer, (on) => {
       state.shimmer = on;
       viewer.setShimmer(on);
     }));
@@ -214,8 +215,8 @@ function syncCalibration() {
   if (document.activeElement !== si) { si.value = model.secondsPerMeter; so.textContent = `${model.secondsPerMeter.toFixed(2)} s`; }
   const cal = model.calib;
   if (calibInfo && cal) {
-    calibInfo.textContent = `场景纵深 ${cal.R.toFixed(1)} m · 可走范围约 ${cal.range.toFixed(1)} m · 步速 ${model.speedEst.toFixed(2)} m/s` +
-      (model.auto ? '' : '（手动）');
+    calibInfo.textContent = tr('calib', { r: cal.R.toFixed(1), w: cal.range.toFixed(1), p: model.speedEst.toFixed(2) }) +
+      (model.auto ? '' : tr('calib.manual'));
   }
 }
 
@@ -224,12 +225,12 @@ const defaultPace = () => (matchMedia('(pointer: coarse)').matches ? 0.8 : 1.2);
 function selectRow(label, options, current, onChange) {
   const row = document.createElement('div');
   row.className = 'row';
-  row.innerHTML = `<label><span>${label}</span></label>`;
+  row.innerHTML = `<label><span>${tr(label)}</span></label>`;
   const sel = document.createElement('select');
   for (const [value, text] of Object.entries(options)) {
     const o = document.createElement('option');
     o.value = value;
-    o.textContent = text;
+    o.textContent = tr(text);
     if (value === current) o.selected = true;
     sel.appendChild(o);
   }
@@ -241,13 +242,13 @@ function selectRow(label, options, current, onChange) {
 function renderVideoControls() {
   const t = state.time;
   const presetLabels = Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, p.label]));
-  panel.appendChild(selectRow('时间预设', presetLabels, model.preset, (v) => model.setPreset(v)));
-  panel.appendChild(selectRow('此刻怎么前进', DRIVERS, model.driver, (v) => { model.driver = v; }));
-  panel.appendChild(selectRow('走到尽头', END_MODES, model.endMode, (v) => { model.endMode = v; }));
+  panel.appendChild(selectRow('preset', presetLabels, model.preset, (v) => model.setPreset(v)));
+  panel.appendChild(selectRow('driver', DRIVERS, model.driver, (v) => { model.driver = v; }));
+  panel.appendChild(selectRow('end', END_MODES, model.endMode, (v) => { model.endMode = v; }));
 
   const autoRow = document.createElement('div');
   autoRow.className = 'checks';
-  const autoBox = checkbox('按场景深度自动校准', model.auto, (on) => {
+  const autoBox = checkbox('auto', model.auto, (on) => {
     model.auto = on;
     if (on) model.recalibrate();
     syncCalibration();
@@ -256,12 +257,12 @@ function renderVideoControls() {
   panel.appendChild(autoRow);
   autoInput = autoBox.querySelector('input');
 
-  const cRow = sliderRow({ label: '世界光速', min: 0.3, max: 10, step: 0.05, unit: ' m/s' }, model.c, (v) => {
+  const cRow = sliderRow({ label: 'c', min: 0.3, max: 10, step: 0.05, unit: ' m/s' }, model.c, (v) => {
     model.c = v;
     model.auto = false;
     autoInput.checked = false;
   });
-  const spmRow = sliderRow({ label: '每走 1 米，此刻前进', min: 0.1, max: 4, step: 0.05, unit: ' s' }, model.secondsPerMeter, (v) => {
+  const spmRow = sliderRow({ label: 'spm', min: 0.1, max: 4, step: 0.05, unit: ' s' }, model.secondsPerMeter, (v) => {
     model.secondsPerMeter = v;
     model.auto = false;
     autoInput.checked = false;
@@ -277,25 +278,25 @@ function renderVideoControls() {
   syncCalibration();
 
   const dur = state.clip ? state.clip.duration : 1;
-  const row = sliderRow({ label: '此刻', min: 0, max: dur, step: 0.01, unit: ' s' }, model.t0, (v) => {
+  const row = sliderRow({ label: 'anchor', min: 0, max: dur, step: 0.01, unit: ' s' }, model.t0, (v) => {
     model.t0 = v;
   });
   anchorInput = row.querySelector('input');
   anchorOut = row.querySelector('output');
   panel.appendChild(row);
 
-  panel.appendChild(sliderRow({ label: '时差色调', min: 0, max: 1, step: 0.05, unit: '' }, t.tint, (v) => {
+  panel.appendChild(sliderRow({ label: 'tint', min: 0, max: 1, step: 0.05, unit: '' }, t.tint, (v) => {
     t.tint = v;
     viewer.setTime({ tint: v });
   }));
-  panel.appendChild(sliderRow({ label: '异时色调', min: 0, max: 1, step: 0.05, unit: '' }, t.ghost, (v) => {
+  panel.appendChild(sliderRow({ label: 'ghost', min: 0, max: 1, step: 0.05, unit: '' }, t.ghost, (v) => {
     t.ghost = v;
     viewer.setTime({ ghost: v });
   }));
 
   const checks = document.createElement('div');
   checks.className = 'checks';
-  checks.appendChild(checkbox('时空图', t.diagram, (on) => {
+  checks.appendChild(checkbox('diagram', t.diagram, (on) => {
     t.diagram = on;
     diagramEl.classList.toggle('hidden', !on || state.mode !== 'video');
   }));
@@ -327,7 +328,7 @@ viewer.onTick = (dt, pos) => {
   hudClock += dt;
   if (hudClock < 0.1) return;
   hudClock = 0;
-  tstatEl.textContent = `v ${observer.speed.toFixed(2)} m/s · β ${model.beta.toFixed(2)} · 此刻 ${model.t0.toFixed(1)} / ${model.duration.toFixed(1)} s`;
+  tstatEl.textContent = tr('tstat', { v: observer.speed.toFixed(2), b: model.beta.toFixed(2), t: model.t0.toFixed(1), d: model.duration.toFixed(1) });
   if (flipped) syncCalibration();
   if (anchorInput && flipped && document.activeElement !== anchorInput) {
     anchorInput.value = model.t0;
@@ -341,7 +342,7 @@ function sliderRow(s, value, onInput) {
   row.className = 'row';
   const label = document.createElement('label');
   const name = document.createElement('span');
-  name.textContent = s.label;
+  name.textContent = tr(s.label);
   const out = document.createElement('output');
   const fmt = s.format || ((v) => `${Number(v).toFixed(s.step < 0.1 ? 2 : s.step < 1 ? 1 : 0)}${s.unit}`);
   out.textContent = fmt(value);
@@ -362,7 +363,7 @@ function checkbox(label, checked, onChange) {
   c.type = 'checkbox';
   c.checked = checked;
   c.onchange = () => onChange(c.checked);
-  l.append(c, ' ' + label);
+  l.append(c, ' ' + tr(label));
   return l;
 }
 
@@ -373,11 +374,15 @@ function renderStats() {
   const k = (n) => (n / 1000).toFixed(0) + 'k';
   el.style.whiteSpace = 'pre-line';
   if (s.kind === 'video') {
-    el.textContent = `${s.frames} 帧 · ${s.duration.toFixed(1)} s · 每帧 ${k(s.points)} 粒子\n` +
-      `深度 ${(s.depthMs / 1000).toFixed(1)} s（${state.device}）· 生成 ${s.buildMs.toFixed(0)} ms`;
+    el.textContent = tr('stats.video', {
+      f: s.frames, s: s.duration.toFixed(1), p: k(s.points),
+      dm: (s.depthMs / 1000).toFixed(1), dev: state.device, bm: s.buildMs.toFixed(0),
+    });
   } else {
-    el.textContent = `照片 ${k(s.photo)} · 影子 ${k(s.shadow)} · 灰烬 ${k(s.ash)} · 断裂 ${k(s.tears)}\n` +
-      `深度 ${s.depthMs.toFixed(0)} ms（${state.device}）· 生成 ${s.buildMs.toFixed(0)} ms`;
+    el.textContent = tr('stats.photo', {
+      p: k(s.photo), s: k(s.shadow), a: k(s.ash), t: k(s.tears),
+      dm: s.depthMs.toFixed(0), dev: state.device, bm: s.buildMs.toFixed(0),
+    });
   }
 }
 
@@ -416,9 +421,9 @@ function showScene() {
 function hintText() {
   const touch = matchMedia('(pointer: coarse)').matches;
   const move = touch
-    ? '单指看四周 · 双指张合前进 · 双指平移侧移'
-    : '拖动看四周 · wasd / 滚轮 移动 · q e 升降';
-  return state.mode === 'video' ? `${move} · 动起来，此刻就会倾斜` : move;
+    ? tr('hint.touch')
+    : tr('hint.mouse');
+  return state.mode === 'video' ? `${move} · ${tr('hint.video')}` : move;
 }
 
 const isVideo = (blob, name = '') => blob.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|ogv)$/i.test(name);
@@ -426,13 +431,13 @@ const isVideo = (blob, name = '') => blob.type.startsWith('video/') || /\.(mp4|m
 async function loadMedia(source) {
   const token = ++state.loadToken;
   intro.classList.add('hidden');
-  showBusy('读取文件');
+  showBusy(tr('busy.read'));
   let blob;
   try {
     blob = source instanceof Blob ? source : await (await fetch(source)).blob();
   } catch (err) {
     console.error(err);
-    showError('读取失败，换一个文件试试。');
+    showError(tr('err.read'));
     return;
   }
   if (token !== state.loadToken) return;
@@ -448,7 +453,7 @@ async function loadMedia(source) {
       state.bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
     } catch (err) {
       console.error(err);
-      showError('这个文件浏览器读不了（比如 HEIC 格式）。换成 JPG、PNG 或 MP4 试试。');
+      showError(tr('err.decode'));
       return;
     }
     renderPanel();
@@ -470,7 +475,7 @@ async function processPhoto() {
   ctx.drawImage(bmp, 0, 0, w, h);
   const rgba = ctx.getImageData(0, 0, w, h).data;
 
-  showBusy('准备深度模型');
+  showBusy(tr('busy.prepare'));
   try {
     const m = await estimateDepth(w, h, rgba);
     if (token !== state.loadToken) return;
@@ -479,27 +484,27 @@ async function processPhoto() {
     rebuild();
   } catch (err) {
     console.error(err);
-    showError('深度估计失败：' + err.message);
+    showError(tr('err.depth', { m: err.message }));
   }
 }
 
 async function processVideo() {
   const token = ++state.loadToken;
   try {
-    showBusy('抽取画面', 0);
+    showBusy(tr('busy.framesStart'), 0);
     const clip = await extractFrames(state.videoBlob, { maxSide: state.videoResolution }, (i, n) => {
-      if (token === state.loadToken) showBusy(`抽取画面 ${i} / ${n}`, i / n);
+      if (token === state.loadToken) showBusy(tr('busy.frames', { i, n }), i / n);
     });
     if (token !== state.loadToken) return;
 
-    showBusy('准备深度模型');
+    showBusy(tr('busy.prepare'));
     const disparities = [];
     const t0 = performance.now();
     for (let i = 0; i < clip.frames.length; i++) {
       const m = await estimateDepth(clip.width, clip.height, clip.frames[i]);
       if (token !== state.loadToken) return;
       disparities.push(m.disparity);
-      showBusy(`估计深度 ${i + 1} / ${clip.frames.length}（${state.device}）`, (i + 1) / clip.frames.length);
+      showBusy(tr('busy.depth', { i: i + 1, n: clip.frames.length, d: state.device }), (i + 1) / clip.frames.length);
     }
     state.clip = { ...clip, disparities };
     state.depthMs = performance.now() - t0;
@@ -511,7 +516,7 @@ async function processVideo() {
     rebuild();
   } catch (err) {
     console.error(err);
-    showError('这段视频处理失败：' + err.message + '。换成 MP4 或更短的视频试试。');
+    showError(tr('err.video', { m: err.message }));
   }
 }
 
@@ -523,7 +528,7 @@ function scheduleRebuild() {
 
 function rebuild() {
   if (state.mode === 'video' ? !state.clip : !state.depth) return;
-  showBusy('凝固中');
+  showBusy(tr('busy.freeze'));
   // let the busy text paint before the synchronous build (no rAF: it stalls in background tabs)
   setTimeout(() => {
     const t0 = performance.now();
@@ -629,8 +634,19 @@ viewer.onMove = (d) => {
   const r = Math.round(d * 10) / 10;
   if (r === lastDist) return;
   lastDist = r;
-  distEl.textContent = r < 0.1 ? '站在拍摄点' : `距拍摄点 ${r.toFixed(1)} m`;
+  distEl.textContent = r < 0.1 ? tr('dist.origin') : tr('dist.away', { d: r.toFixed(1) });
 };
+
+// ---------------------------------------------------------------- language
+
+applyStatic();
+distEl.textContent = tr('dist.origin');
+$('btn-lang').onclick = () => setLang(getLang() === 'en' ? 'zh' : 'en');
+onLangChange(() => {
+  renderPanel();
+  $('hint').textContent = hintText();
+  lastDist = -1; // rewrite the distance line on the next frame
+});
 
 $('hint').textContent = hintText();
 $('btn-home').disabled = true;

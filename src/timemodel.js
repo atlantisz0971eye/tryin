@@ -6,25 +6,25 @@
 //        + (|p| − |r|) / c          legacy: change in distance since the original viewpoint
 //
 // r is the particle relative to you, v your velocity, c the (slow) speed of light of this world.
-// Each preset is a set of weights for the last three terms; the shader evaluates the formula.
+// Labels are i18n keys. Each preset is a set of weights for the last three terms; the shader evaluates the formula.
 
 export const PRESETS = {
-  simultaneity: { label: '同时性：怎么走，此刻就怎么倾斜', tilt: 1, delay: 0, rel: 0 },
-  seen: { label: '真实所见：同时性 + 光行时间', tilt: 1, delay: 1, rel: 0 },
-  slowLight: { label: '光速很慢：越远越是过去', tilt: 0, delay: 1, rel: 0 },
-  relative: { label: '以拍摄点为此刻：走近 = 未来', tilt: 0, delay: 0, rel: 1 },
+  simultaneity: { label: 'preset.simultaneity', tilt: 1, delay: 0, rel: 0 },
+  seen: { label: 'preset.seen', tilt: 1, delay: 1, rel: 0 },
+  slowLight: { label: 'preset.slowLight', tilt: 0, delay: 1, rel: 0 },
+  relative: { label: 'preset.relative', tilt: 0, delay: 0, rel: 1 },
 };
 
 export const DRIVERS = {
-  walk: '随步行累积：走才有时间，站着不动就凝固',
-  fixed: '固定：此刻不动，只在移动时倾斜',
-  clock: '时钟：此刻自己来回流动',
+  walk: 'driver.walk',
+  fixed: 'driver.fixed',
+  clock: 'driver.clock',
 };
 
 export const END_MODES = {
-  bounce: '往返：走到尽头，时间往回流',
-  loop: '循环：回到开头继续',
-  stop: '停在尽头',
+  bounce: 'end.bounce',
+  loop: 'end.loop',
+  stop: 'end.stop',
 };
 
 const MAX_BETA = 0.95;
