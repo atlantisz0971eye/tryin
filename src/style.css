@@ -130,7 +130,18 @@ html, body {
   cursor: pointer;
   transition: opacity 0.25s;
 }
+.label { position: relative; }
+/* a generous tap area around the small word */
+.label::after { content: ""; position: absolute; inset: -12px -14px; }
 .label:hover { opacity: 0.7; }
+/* the menu word breathes while the guide is up, so it reads as something to press */
+.label.attention {
+  animation: breathe 2.1s ease-in-out infinite;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 7px;
+}
+@keyframes breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 .label:disabled { opacity: 0.3; cursor: default; }
 .label:focus-visible { outline: 1px solid var(--line); outline-offset: 4px; }
 /* the back of the print shows the name mirrored, like the reversed word on the cover */
@@ -170,7 +181,54 @@ html, body {
   :root { --mb: 124px; }
   .margin { bottom: calc(var(--mb) * 0.44 + env(safe-area-inset-bottom)); }
   #diagram { bottom: calc(var(--mb) * 0.44 + env(safe-area-inset-bottom) - 2px); }
+  #guide { bottom: calc(var(--mb) * 0.44 + 40px + env(safe-area-inset-bottom)); }
 }
+
+/* hand-drawn arrows from the picture down to the two corner labels */
+#guide {
+  position: absolute;
+  left: max(var(--m), env(safe-area-inset-left));
+  right: max(var(--m), env(safe-area-inset-right));
+  bottom: calc(var(--mb) * 0.36 + 40px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  pointer-events: none;
+  z-index: 12;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  font-family: var(--hand);
+  color: var(--fg);
+}
+#guide.on { opacity: 1; }
+
+.guide-item { display: flex; flex-direction: column; gap: 4px; }
+.guide-home { align-items: flex-start; transform: rotate(-3deg); }
+.guide-menu { align-items: flex-end; text-align: right; transform: rotate(2deg); }
+
+.guide-note { font-size: clamp(22px, 3.2vmin, 28px); line-height: 1; opacity: 0.8; }
+.guide-note small { display: block; margin-top: 3px; font-size: 0.72em; opacity: 0.75; }
+.guide-menu .guide-note { font-size: clamp(27px, 4.2vmin, 36px); opacity: 1; }
+.guide-menu .guide-note small { font-size: 0.6em; }
+
+.guide-item svg {
+  width: 52px;
+  height: 68px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.guide-home svg { opacity: 0.8; }
+.guide-menu svg { width: 66px; height: 86px; stroke-width: 2.3; }
+/* The arrows ease in with opacity and a small drop, which run off the main thread, so they still
+   appear while the page is busy loading. The menu arrow then bobs. */
+#guide.on .guide-item svg { animation: arrowIn 0.7s 0.45s ease-out both; }
+#guide.on .guide-menu svg { animation: arrowIn 0.7s 0.45s ease-out both, bob 1.7s 1.4s ease-in-out infinite; }
+@keyframes arrowIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(6px); } }
 
 /* ------------------------------------------------------------------ front: the moment */
 
@@ -195,32 +253,44 @@ html, body {
   z-index: 10;
 }
 
-.intro-inner { width: min(440px, 100%); text-align: center; }
+.intro-inner { width: min(460px, 100%); text-align: center; font-family: var(--hand); }
 
 h1 {
-  font-family: var(--serif);
-  font-weight: 300;
-  font-size: clamp(34px, 6vmin, 56px);
-  letter-spacing: 0.06em;
-  margin: 0 0 10px;
+  font-family: var(--hand);
+  font-weight: 500;
+  font-size: clamp(64px, 12vmin, 112px);
+  line-height: 0.95;
+  letter-spacing: 0;
+  margin: 0 0 6px;
+  transform: rotate(-2.5deg);
 }
 
-.lede { color: var(--muted); margin: 0 0 32px; line-height: 1.8; font-size: 14px; }
+.lede {
+  color: var(--muted);
+  margin: 0 0 30px;
+  line-height: 1.2;
+  font-size: clamp(24px, 3.6vmin, 30px);
+  transform: rotate(-0.6deg);
+}
 
+/* the drop zone is drawn by hand: uneven corners, slightly tilted */
 .drop {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 40px 20px;
-  border: 1px solid var(--line);
+  display: block;
+  padding: 30px 22px 26px;
+  border: 1.6px solid rgba(230, 225, 214, 0.5);
+  border-radius: 255px 18px 225px 15px / 15px 225px 18px 255px;
   cursor: pointer;
-  transition: border-color 0.25s, background 0.25s;
+  transform: rotate(0.8deg);
+  transition: border-color 0.25s, background 0.25s, transform 0.25s;
 }
-.drop:hover, .drop.over { border-color: rgba(230, 225, 214, 0.55); background: rgba(230, 225, 214, 0.025); }
-.drop-title { font-size: 15px; letter-spacing: 0.08em; }
-.drop-sub { font-family: var(--serif); font-size: 14px; color: var(--muted); letter-spacing: 0.04em; }
+.drop:hover, .drop.over {
+  border-color: rgba(230, 225, 214, 0.9);
+  background: rgba(230, 225, 214, 0.04);
+  transform: rotate(-0.4deg);
+}
+.drop-title { display: block; font-size: clamp(25px, 4vmin, 34px); line-height: 1.15; text-wrap: balance; }
 
-.fine { margin-top: 22px; font-size: 12px; line-height: 1.9; color: var(--muted); }
+.fine { margin-top: 22px; font-size: 21px; line-height: 1.2; color: var(--muted); opacity: 0.8; transform: rotate(-0.4deg); }
 .error { color: var(--ember); }
 
 .busy-inner { text-align: center; width: min(320px, 100%); }
@@ -539,6 +609,8 @@ h1 {
 .stats { color: var(--pencil); opacity: 0.65; font-size: 16px; line-height: 1.35; margin-top: 4px; }
 
 @media (prefers-reduced-motion: reduce) {
+  .label.attention, #guide.on .guide-menu svg { animation: none; }
+  #guide.on .guide-item svg { animation: none; }
   .card { transition-duration: 0.01s; }
   .desk.turning { animation: none; }
 }
