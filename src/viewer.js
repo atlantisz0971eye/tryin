@@ -464,6 +464,143 @@ void main() {
 }
 `;
 
+// The actors of a video: a full-grid mesh that shows the moving things of the moment the viewer's
+// position selects. Where nothing moves it is fully transparent and the static world mesh shows.
+// Time is chosen per *place* (from a smooth depth), never per pixel, so a person stays whole.
+const ACTOR_VERT = /* glsl */ `
+precision highp sampler2DArray;
+uniform sampler2DArray uDepth;
+uniform sampler2DArray uColor;
+uniform sampler2D uWorld;
+uniform vec2 uGrid;
+uniform float uFocal;
+uniform float uFrames;
+uniform float uAnchor;
+uniform float uC;
+uniform float uFps;
+uniform float uJump;
+uniform vec3 uVel;
+uniform float uGamma;
+uniform vec3 uW;
+varying vec2 vUv;
+varying float vF;
+varying vec3 vWorld;
+varying float vTear;
+
+vec3 rayOf(vec2 p) {
+  return vec3((p.x + 0.5 - uGrid.x * 0.5) / uFocal, -(p.y + 0.5 - uGrid.y * 0.5) / uFocal, -1.0);
+}
+
+float ease(float t) { return smoothstep(0.15, 0.85, t); }
+
+// depth of the actors' surface at a pixel for the moment between frames i0 and i1; where nothing
+// moves it is the world's depth
+float actorZ(ivec2 q, int i0, int i1, float t, float frac) {
+  ivec2 c = clamp(q, ivec2(0), ivec2(uGrid) - 1);
+  float d0 = texelFetch(uDepth, ivec3(c, i0), 0).r;
+  float d1 = texelFetch(uDepth, ivec3(c, i1), 0).r;
+  float zf = abs(log(d1 / d0)) > uJump ? (frac < 0.5 ? d0 : d1) : mix(d0, d1, t);
+  float m = mix(texelFetch(uColor, ivec3(c, i0), 0).a, texelFetch(uColor, ivec3(c, i1), 0).a, t);
+  return mix(texelFetch(uWorld, c, 0).r, zf, smoothstep(0.1, 0.6, m));
+}
+
+void main() {
+  vec2 pix = position.xy;
+  ivec2 p = ivec2(pix);
+  vec3 ray = rayOf(pix);
+  vec2 wd = texelFetch(uWorld, p, 0).rg;
+
+  // which moment: the same relativistic time as the particles, but from the smoothed background depth
+  float fmax = uFrames - 1.0;
+  vec3 wp = ray * wd.g;
+  vec3 r = wp - cameraPosition;
+  float dist = length(r);
+  float sec = uW.x * uGamma * dot(uVel, r) / (uC * uC)
+            - uW.y * dist / uC
+            + uW.z * (length(wp) - dist) / uC;
+  float f = clamp(clamp(uAnchor, 0.0, fmax) + sec * uFps, 0.0, fmax);
+
+  float fl = floor(f);
+  int i0 = int(fl);
+  int i1 = min(i0 + 1, int(uFrames) - 1);
+  float t = ease(f - fl);
+  float frac = f - fl;
+  // a mover sits at its own depth, the empty place at the world's
+  float z = actorZ(p, i0, i1, t, frac);
+  // where the surface jumps in depth between neighbours (the edge of a mover) the sliver between the
+  // two layers would only smear; mark it so the fragment can drop it
+  float zl = actorZ(p + ivec2(-1, 0), i0, i1, t, frac);
+  float zr = actorZ(p + ivec2(1, 0), i0, i1, t, frac);
+  float zu = actorZ(p + ivec2(0, -1), i0, i1, t, frac);
+  float zd = actorZ(p + ivec2(0, 1), i0, i1, t, frac);
+  float jump = max(max(abs(log(zl / z)), abs(log(zr / z))), max(abs(log(zu / z)), abs(log(zd / z))));
+  vTear = jump > uJump * 2.5 ? 1.0 : 0.0;
+
+  vF = f;
+  vUv = (pix + 0.5) / uGrid;
+  vWorld = ray * z * 0.997;   // a hair in front of the world, so equal depths never fight
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(vWorld, 1.0);
+}
+`;
+
+const ACTOR_FRAG = /* glsl */ `
+precision highp float;
+precision highp sampler2DArray;
+uniform sampler2DArray uColor;
+uniform vec2 uGrid;
+uniform float uFrames;
+uniform float uFeather;
+uniform float uReveal;
+uniform float uBleach;
+uniform float uStretch;
+varying vec2 vUv;
+varying float vF;
+varying vec3 vWorld;
+varying float vTear;
+
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+void main() {
+  if (vTear > 0.35) discard;
+  float fl = floor(vF);
+  float i0 = fl;
+  float i1 = min(fl + 1.0, uFrames - 1.0);
+  float t = smoothstep(0.15, 0.85, vF - fl);
+  vec4 c = mix(texture(uColor, vec3(vUv, i0)), texture(uColor, vec3(vUv, i1)), t);
+  if (c.a < 0.02) discard;
+
+  vec2 pix = vUv * uGrid;
+  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
+  float te = uFeather > 0.0 ? smoothstep(0.0, 1.0, clamp(edge, 0.0, 1.0)) : 1.0;
+
+  // a stretched sliver of an actor dissolves into grain, as in the photo mesh
+  float h = hash21(floor(vUv * uGrid * 3.0));
+  vec3 nrm = cross(dFdx(vWorld), dFdy(vWorld));
+  float nl = length(nrm);
+  vec3 nn = nl > 1e-12 ? nrm / nl : vec3(0.0, 0.0, 1.0);
+  float facingNow = abs(dot(nn, normalize(cameraPosition - vWorld)));
+  float facingThen = abs(dot(nn, normalize(-vWorld)));
+  float k = smoothstep(uStretch * 0.5, uStretch * 1.6, facingNow / (facingThen + 0.03));
+  if (k > h) discard;
+
+  vec3 col = c.rgb;
+  if (uBleach > 0.0) {
+    float amt = uBleach * smoothstep(0.2, 3.0, length(cameraPosition));
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    col = mix(col, mix(vec3(lum), vec3(0.93, 0.91, 0.86), 0.3 + 0.5 * lum), amt);
+  }
+  if (!gl_FrontFacing) col *= 0.35;
+
+  float a = c.a * te * smoothstep(0.0, 1.0, uReveal);
+  if (a < 0.01) discard;
+  gl_FragColor = vec4(col, a);
+}
+`;
+
 export class Viewer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -648,7 +785,7 @@ export class Viewer {
     this.revealStart = this.timer.getElapsed();
   }
 
-  setTimeField(tf) {
+  setTimeField(tf, world = null) {
     this._clear();
     const { width: W, height: H, frames: F } = tf;
     const depthTex = new THREE.DataArrayTexture(tf.depth, W, H, F);
@@ -665,6 +802,8 @@ export class Viewer {
       t.unpackAlignment = 1;
       t.needsUpdate = true;
     }
+    // the actors are drawn as a surface, so their colour is sampled smoothly (particles use texelFetch)
+    colorTex.minFilter = colorTex.magFilter = THREE.LinearFilter;
     this.textures = [depthTex, colorTex, plateDepthTex, plateColorTex];
 
     const u = this.timeUniforms;
@@ -702,9 +841,60 @@ export class Viewer {
     this._applyVisibility();
     // the photo texture is only for photo mode
     if (this.photoTex) { this.photoTex.dispose(); this.photoTex = null; this.photoTexSrc = null; }
+    if (world) this._addWorld(tf, world);
+    this._applyVisibility();
     this.camera.fov = tf.vfov;
     this._resize();
     this.revealStart = this.timer.getElapsed();
+  }
+
+  // world: { built, canvas } - the static world as a photo-like scene plus its clean colour plate
+  _addWorld(tf, world) {
+    const { width: W, height: H } = tf;
+    const { built, canvas } = world;
+    this.layers.shadow = this._makePoints(built.shadow, FRAG_SOLID, false);
+    this.layers.ash = this._makePoints(built.ash, FRAG_ASH, true);
+    this.layers.ash.renderOrder = 3;
+    this.scene.add(this.layers.shadow, this.layers.ash);
+    this._addHalo('shadow', this.layers.shadow);
+    this.setPhotoMesh(built.mesh, canvas);
+
+    // exact background depth (r) and the smooth depth that only picks the moment (g)
+    const wt = new Float32Array(W * H * 2);
+    for (let i = 0; i < W * H; i++) { wt[i * 2] = tf.world.depth[i]; wt[i * 2 + 1] = tf.world.timeDepth[i]; }
+    const worldTex = new THREE.DataTexture(wt, W, H, THREE.RGFormat, THREE.FloatType);
+    worldTex.minFilter = worldTex.magFilter = THREE.NearestFilter;
+    worldTex.generateMipmaps = false;
+    worldTex.unpackAlignment = 1;
+    worldTex.needsUpdate = true;
+    this.textures.push(worldTex);
+
+    const pos = new Float32Array(W * H * 3);
+    for (let y = 0, i = 0; y < H; y++) for (let x = 0; x < W; x++, i++) { pos[i * 3] = x; pos[i * 3 + 1] = y; }
+    const idx = new Uint32Array((W - 1) * (H - 1) * 6);
+    let n = 0;
+    for (let y = 0; y < H - 1; y++) {
+      for (let x = 0; x < W - 1; x++) {
+        const a = y * W + x, b = a + 1, c = a + W, d = c + 1;
+        idx[n++] = a; idx[n++] = d; idx[n++] = b;
+        idx[n++] = a; idx[n++] = c; idx[n++] = d;
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { ...this.uniforms, ...this.timeUniforms, uWorld: { value: worldTex }, uStretch: this.stretchUniform },
+      vertexShader: ACTOR_VERT,
+      fragmentShader: ACTOR_FRAG,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 1;
+    this.layers.actors = mesh;
+    this.scene.add(mesh);
   }
 
   setTime({ anchor, c, vel, gamma, weights, ghost, tint } = {}) {
@@ -761,18 +951,26 @@ export class Viewer {
     this._applyVisibility();
   }
 
-  // 'photo' means whichever surface is active: the textured mesh or the photo particles
+  // 'photo' means whichever surface is active: the textured mesh or the photo particles. For a video
+  // the mesh surface is the static world plus the actors; the particle surface is the per-pixel clock.
   _applyVisibility() {
     const w = this.wanted, L = this.layers, H = this.halos;
     const mesh = this.surface === 'mesh' && !!L.mesh;
+    const video = !!L.frames;
     const set = (obj, on) => { if (obj) obj.visible = on; };
     const photo = w.photo !== false;
     set(L.photo, photo && !mesh);
     set(H.photo, photo && !mesh);
     set(L.mesh, photo && mesh);
-    for (const k of ['shadow', 'ash', 'frames', 'plate']) {
-      set(L[k], w[k] !== false);
-      set(H[k], w[k] !== false);
+    set(L.actors, mesh && w.actors !== false);
+    for (const k of ['frames', 'plate']) {
+      set(L[k], w[k] !== false && !mesh);
+      set(H[k], w[k] !== false && !mesh);
+    }
+    for (const k of ['shadow', 'ash']) {
+      const on = w[k] !== false && (!video || mesh);
+      set(L[k], on);
+      set(H[k], on);
     }
     // halos ignore depth, so with the mesh in front the shadow stays as plain discs
     if (L.shadow) L.shadow.material.uniforms.uSoftMul.value = mesh ? 0 : 1;
