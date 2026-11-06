@@ -15,6 +15,14 @@ uniform float uTime;
 uniform float uShimmer;
 uniform float uBleach;
 uniform float uIsPhoto;
+uniform vec2 uGrid;
+uniform float uFocal;
+uniform float uSoft;
+uniform float uSoftLo;
+uniform float uSoftHi;
+uniform float uFeather;
+uniform float uPassScale;
+varying float vSoft;
 varying vec3 vColor;
 varying float vAlpha;
 
@@ -40,7 +48,15 @@ void main() {
   ps *= smoothstep(h * 0.6, h * 0.6 + 0.4, uReveal);
   vAlpha = aAlpha * (1.0 - uShimmer * 0.45 * (0.5 + 0.5 * sin(uTime * 0.6 + h * 40.0)));
   if (ps < 1.0) { vAlpha *= ps; ps = 1.0; }
-  gl_PointSize = d < 0.03 ? 0.0 : min(ps, uMaxPx);
+  // once a point is blown up on screen it turns into a soft blob: up close the cloud reads as
+  // out-of-focus light instead of hard coins
+  vSoft = uSoft * smoothstep(uSoftLo, uSoftHi, ps);
+  ps *= 1.0 + 0.7 * vSoft;
+  // feather the borders of the picture into the surrounding glow
+  vec2 pix = position.xy / max(-position.z, 1e-4) * uFocal * vec2(1.0, -1.0) + uGrid * 0.5;
+  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
+  bool keep = uFeather <= 0.0 || fract(h * 91.7) < smoothstep(0.0, 1.0, edge);
+  gl_PointSize = (d < 0.03 || !keep) ? 0.0 : min(ps, uMaxPx) * uPassScale;
   vColor = aColor;
   if (uIsPhoto > 0.5 && uBleach > 0.0) {
     // flash bleach: the further from the moment's viewpoint, the more the world is burnt pale,
@@ -56,10 +72,86 @@ void main() {
 const FRAG_SOLID = /* glsl */ `
 varying vec3 vColor;
 varying float vAlpha;
+varying float vSoft;
 void main() {
   vec2 c = gl_PointCoord * 2.0 - 1.0;
-  if (dot(c, c) > 1.0) discard;
+  // soft points keep only a small opaque core; the halo is drawn by FRAG_HALO
+  if (dot(c, c) > mix(1.0, 0.06, vSoft)) discard;
   gl_FragColor = vec4(vColor, 1.0);
+}
+`;
+
+const FRAG_HALO = /* glsl */ `
+varying vec3 vColor;
+varying float vAlpha;
+varying float vSoft;
+void main() {
+  if (vSoft < 0.01) discard;
+  vec2 c = gl_PointCoord * 2.0 - 1.0;
+  float r2 = dot(c, c);
+  if (r2 > 1.0) discard;
+  float a = vSoft * exp(-r2 * 2.2);
+  gl_FragColor = vec4(vColor * a, a);
+}
+`;
+
+// Resolves the accumulated halos: weighted average colour, coverage from the summed weight.
+const COMPOSITE_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() {
+  vUv = position.xy * 0.5 + 0.5;
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}
+`;
+
+const COMPOSITE_FRAG = /* glsl */ `
+uniform sampler2D tAccum;
+varying vec2 vUv;
+void main() {
+  vec4 acc = texture2D(tAccum, vUv);
+  if (acc.a < 0.002) discard;
+  gl_FragColor = vec4(acc.rgb / acc.a, clamp(acc.a * 1.4, 0.0, 1.0));
+}
+`;
+
+// An enormous, heavily blurred copy of the picture around everything, like the glow that
+// surrounds spatial photos on Vision Pro. Edge colours stretch outwards and fade.
+const BG_VERT = /* glsl */ `
+varying vec3 vDir;
+void main() {
+  vDir = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const BG_FRAG = /* glsl */ `
+precision highp sampler2DArray;
+uniform sampler2DArray uBg;
+uniform float uBgFrame;
+uniform float uBgFrames;
+uniform float uBgStrength;
+uniform vec2 uGrid;
+uniform float uFocal;
+varying vec3 vDir;
+
+vec3 sampleBg(vec2 uv) {
+  float fl = floor(uBgFrame);
+  float l1 = min(fl + 1.0, uBgFrames - 1.0);
+  return mix(texture(uBg, vec3(uv, fl)).rgb, texture(uBg, vec3(uv, l1)).rgb, uBgFrame - fl);
+}
+
+void main() {
+  vec3 d = normalize(vDir);
+  float fwd = max(-d.z, 0.08);
+  vec2 uv = vec2(d.x / fwd * uFocal / uGrid.x, -d.y / fwd * uFocal / uGrid.y) + 0.5;
+  vec2 cuv = clamp(uv, 0.0, 1.0);
+  vec2 out2 = max(abs(uv - 0.5) - 0.5, 0.0) * vec2(uGrid.x / uGrid.y, 1.0);
+  float outside = length(out2);
+  // blend in a sample pulled towards the centre so stretched edges smear into a wide glow
+  vec3 col = mix(sampleBg(cuv), sampleBg(mix(cuv, vec2(0.5), 0.35)), clamp(outside, 0.0, 0.6));
+  float behind = smoothstep(-0.1, 0.5, d.z);
+  float glow = mix(0.62, 0.12, 1.0 - exp(-outside * 1.4)) * (1.0 - 0.75 * behind);
+  gl_FragColor = vec4(col * glow * uBgStrength, 1.0);
 }
 `;
 
@@ -101,6 +193,12 @@ uniform float uMaxPx;
 uniform float uSizeMul;
 uniform float uReveal;
 uniform float uBleach;
+uniform float uSoft;
+uniform float uSoftLo;
+uniform float uSoftHi;
+uniform float uFeather;
+uniform float uPassScale;
+varying float vSoft;
 varying vec3 vColor;
 varying float vAlpha;
 
@@ -207,11 +305,15 @@ void main() {
   ps *= smoothstep(h * 0.6, h * 0.6 + 0.4, uReveal);
   vAlpha = 1.0;
   vColor = col;
+  vSoft = uSoft * smoothstep(uSoftLo, uSoftHi, ps);
+  ps *= 1.0 + 0.7 * vSoft;
+  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
+  if (uFeather > 0.0 && fract(h * 91.7) > smoothstep(0.0, 1.0, edge)) visible = false;
   if (!visible || d < 0.03) {
     gl_PointSize = 0.0;
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   } else {
-    gl_PointSize = min(max(ps, 1.0), uMaxPx);
+    gl_PointSize = min(max(ps, 1.0), uMaxPx) * uPassScale;
   }
 }
 `;
@@ -224,6 +326,27 @@ export class Viewer {
     this.renderer.setClearColor(0x000000, 1);
 
     this.scene = new THREE.Scene();
+    this.bgTexture = null;
+    this.renderer.autoClear = false;
+
+    // soft halos are accumulated at half resolution, then averaged over the sharp scene
+    this.haloScene = new THREE.Scene();
+    this.accum = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+    this.compScene = new THREE.Scene();
+    this.compCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const comp = new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.ShaderMaterial({
+        uniforms: { tAccum: { value: this.accum.texture } },
+        vertexShader: COMPOSITE_VERT,
+        fragmentShader: COMPOSITE_FRAG,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    comp.frustumCulled = false;
+    this.compScene.add(comp);
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.02, 500);
     this.camera.rotation.order = 'YXZ';
 
@@ -236,8 +359,39 @@ export class Viewer {
       uBleach: { value: 0 },
       uViewport: { value: new THREE.Vector2(1, 1) },
       // up close, points stop growing and the surface dissolves into particles
-      uMaxPx: { value: 28 },
+      uMaxPx: { value: 44 },
+      uSoft: { value: 1 },
+      uSoftLo: { value: 5 },
+      uSoftHi: { value: 18 },
+      uFeather: { value: 0.06 },
+      uPassScale: { value: 1 },
+      uGrid: { value: new THREE.Vector2(1, 1) },
+      uFocal: { value: 1 },
     };
+    this.feather = 0.06;
+    this.halos = {};
+    this.bgUniforms = {
+      uBg: { value: null },
+      uBgFrame: { value: 0 },
+      uBgFrames: { value: 1 },
+      uBgStrength: { value: 1 },
+      uGrid: this.uniforms.uGrid,
+      uFocal: this.uniforms.uFocal,
+    };
+    this.bg = new THREE.Mesh(
+      new THREE.SphereGeometry(300, 48, 24),
+      new THREE.ShaderMaterial({
+        uniforms: this.bgUniforms,
+        vertexShader: BG_VERT,
+        fragmentShader: BG_FRAG,
+        side: THREE.BackSide,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    this.bg.renderOrder = -1;
+    this.bg.frustumCulled = false;
+    this.bg.visible = false;
     this.layers = {};
     this.textures = [];
     this.revealStart = 0;
@@ -246,8 +400,6 @@ export class Viewer {
       uColor: { value: null },
       uPlateDepth: { value: null },
       uPlateColor: { value: null },
-      uGrid: { value: new THREE.Vector2(1, 1) },
-      uFocal: { value: 1 },
       uFrames: { value: 1 },
       uAnchor: { value: 0 },
       uC: { value: 1.5 },
@@ -269,6 +421,7 @@ export class Viewer {
     this.returning = null;
     this.onMove = null;
 
+    this.scene.add(this.bg);
     this._bindInput();
     this._resize();
     window.addEventListener('resize', () => this._resize());
@@ -277,14 +430,38 @@ export class Viewer {
   }
 
   _clear() {
-    for (const obj of Object.values(this.layers)) {
+    for (const obj of [...Object.values(this.layers), ...Object.values(this.halos)]) {
       this.scene.remove(obj);
+      this.haloScene.remove(obj);
       obj.geometry.dispose();
       obj.material.dispose();
     }
     for (const t of this.textures) t.dispose();
     this.layers = {};
+    this.halos = {};
     this.textures = [];
+  }
+
+  // the soft halo of every blown-up point of an opaque layer, summed into the accumulation buffer
+  _addHalo(name, solid) {
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { ...solid.material.uniforms, uPassScale: { value: 0.5 } },
+      vertexShader: solid.material.vertexShader,
+      fragmentShader: FRAG_HALO,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneFactor,
+      blendSrcAlpha: THREE.OneFactor,
+      blendDstAlpha: THREE.OneFactor,
+    });
+    const halo = new THREE.Points(solid.geometry, mat);
+    halo.frustumCulled = false;
+    this.halos[name] = halo;
+    this.haloScene.add(halo);
   }
 
   setScene(built) {
@@ -294,7 +471,12 @@ export class Viewer {
       shadow: this._makePoints(built.shadow, FRAG_SOLID, false),
       ash: this._makePoints(built.ash, FRAG_ASH, true),
     };
+    this.layers.ash.renderOrder = 2;
     for (const obj of Object.values(this.layers)) this.scene.add(obj);
+    this._addHalo('photo', this.layers.photo);
+    this._addHalo('shadow', this.layers.shadow);
+    this.uniforms.uGrid.value.set(built.meta.width, built.meta.height);
+    this.uniforms.uFocal.value = built.meta.focal;
     this.camera.fov = built.meta.vfov;
     this._resize();
     this.revealStart = this.timer.getElapsed();
@@ -324,8 +506,8 @@ export class Viewer {
     u.uColor.value = colorTex;
     u.uPlateDepth.value = plateDepthTex;
     u.uPlateColor.value = plateColorTex;
-    u.uGrid.value.set(W, H);
-    u.uFocal.value = tf.focal;
+    this.uniforms.uGrid.value.set(W, H);
+    this.uniforms.uFocal.value = tf.focal;
     u.uFrames.value = F;
     u.uFps.value = tf.fps;
     u.uJump.value = tf.jump;
@@ -349,6 +531,8 @@ export class Viewer {
     };
     this.layers = { frames: make(false), plate: make(true) };
     for (const obj of Object.values(this.layers)) this.scene.add(obj);
+    this._addHalo('frames', this.layers.frames);
+    this._addHalo('plate', this.layers.plate);
     this.camera.fov = tf.vfov;
     this._resize();
     this.revealStart = this.timer.getElapsed();
@@ -393,7 +577,38 @@ export class Viewer {
 
   setLayerVisible(name, visible) {
     if (this.layers[name]) this.layers[name].visible = visible;
+    if (this.halos[name]) this.halos[name].visible = visible;
   }
+
+  // frames: array of small blurred RGBA images (one for a photo, one per frame for a video)
+  setBackground(frames, width, height) {
+    if (this.bgTexture) this.bgTexture.dispose();
+    const data = new Uint8Array(width * height * 4 * frames.length);
+    frames.forEach((f, i) => data.set(f, i * width * height * 4));
+    const tex = new THREE.DataArrayTexture(data, width, height, frames.length);
+    tex.format = THREE.RGBAFormat;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    this.bgTexture = tex;
+    this.bgUniforms.uBg.value = tex;
+    this.bgUniforms.uBgFrames.value = frames.length;
+    this.bgUniforms.uBgFrame.value = 0;
+    this.setImmersive(this.immersive !== false);
+  }
+
+  setImmersive(on) {
+    this.immersive = on;
+    this.bg.visible = on && !!this.bgTexture;
+    this.uniforms.uFeather.value = on ? this.feather : 0;
+  }
+
+  setBackgroundStrength(v) { this.bgUniforms.uBgStrength.value = v; }
+  setBackgroundFrame(f) { this.bgUniforms.uBgFrame.value = Math.max(0, Math.min(this.bgUniforms.uBgFrames.value - 1, f)); }
+  setSoftness(v) { this.uniforms.uSoft.value = v; }
 
   setSizeMul(v) { this.uniforms.uSizeMul.value = v; }
   setShimmer(on) { this.uniforms.uShimmer.value = on ? 1 : 0; }
@@ -411,7 +626,11 @@ export class Viewer {
     this.camera.updateProjectionMatrix();
     const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.uniforms.uViewport.value.copy(buf);
-    this.uniforms.uMaxPx.value = 28 * this.renderer.getPixelRatio();
+    const dpr = this.renderer.getPixelRatio();
+    this.uniforms.uMaxPx.value = 44 * dpr;
+    this.uniforms.uSoftLo.value = 3 * dpr;
+    this.uniforms.uSoftHi.value = 12 * dpr;
+    this.accum.setSize(Math.max(1, Math.floor(buf.x / 2)), Math.max(1, Math.floor(buf.y / 2)));
     this.uniforms.uPxScale.value = (this.camera.projectionMatrix.elements[5] * buf.y) / 2;
   }
 
@@ -518,7 +737,17 @@ export class Viewer {
 
     this.camera.position.copy(this.pos);
     this.camera.rotation.set(this.pitch, this.yaw, 0);
+    this.bg.position.copy(this.pos);
     if (this.onMove) this.onMove(this.pos.length());
-    this.renderer.render(this.scene, this.camera);
+    const r = this.renderer;
+    r.setRenderTarget(this.accum);
+    r.setClearColor(0x000000, 0);
+    r.clear();
+    if (this.uniforms.uSoft.value > 0) r.render(this.haloScene, this.camera);
+    r.setRenderTarget(null);
+    r.setClearColor(0x000000, 1);
+    r.clear();
+    r.render(this.scene, this.camera);
+    if (this.uniforms.uSoft.value > 0) r.render(this.compScene, this.compCamera);
   }
 }
