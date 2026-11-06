@@ -4,7 +4,7 @@
     {
       "name": "atom",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "5178", "--bind", "127.0.0.1"],
+      "runtimeArgs": ["scripts/serve.py", "5178"],
       "port": 5178
     }
   ]
