@@ -1,5 +1,7 @@
 import { Viewer } from './viewer.js';
 import { buildScene, DEFAULTS } from './build.js';
+import { buildTimeField, TIME_DEFAULTS } from './timefield.js';
+import { extractFrames } from './video.js';
 
 const $ = (id) => document.getElementById(id);
 const intro = $('intro'), busy = $('busy'), hud = $('hud'), panel = $('panel');
@@ -7,28 +9,73 @@ const busyText = $('busy-text'), busyBar = $('busy-bar');
 
 const viewer = new Viewer($('stage'));
 const worker = new Worker(new URL('./depth-worker.js', import.meta.url), { type: 'module' });
+
+const state = {
+  mode: 'photo',      // 'photo' | 'video'
+  // photo
+  bitmap: null,
+  resolution: 640,
+  depth: null,        // { width, height, rgba, disparity }
+  params: { ...DEFAULTS },
+  shimmer: true,
+  layers: { photo: true, shadow: true, ash: true },
+  // video
+  videoBlob: null,
+  videoResolution: 480,
+  clip: null,         // { width, height, frames, disparities, fps, duration }
+  timeParams: { ...TIME_DEFAULTS },
+  time: { anchor: 0, c: 1.5, mode: 0, ghost: 0.6, flow: false },
+  videoLayers: { frames: true, plate: true },
+  // shared
+  sizeMul: 1.4,
+  bleach: 0,
+  device: '',
+  stats: null,
+  loadToken: 0,
+};
+
+// ---------------------------------------------------------------- depth worker
+
+let jobSeq = 0;
+const jobs = new Map();
+const downloads = new Map();
+
+function estimateDepth(width, height, rgba) {
+  const id = ++jobSeq;
+  return new Promise((resolve, reject) => {
+    jobs.set(id, { resolve, reject });
+    worker.postMessage({ id, width, height, pixels: rgba.slice() });
+  });
+}
+
 worker.onerror = (e) => {
   console.error(e);
   showError('深度模型加载失败，请检查网络后刷新重试。');
 };
 
-const state = {
-  bitmap: null,
-  resolution: 640,
-  depth: null,      // { width, height, rgba, disparity }
-  params: { ...DEFAULTS },
-  sizeMul: 1.4,
-  bleach: 0,
-  shimmer: true,
-  layers: { photo: true, shadow: true, ash: true },
-  jobId: 0,
-  device: '',
-  stats: null,
+worker.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === 'progress') {
+    downloads.set(m.file, m);
+    let loaded = 0, total = 0;
+    for (const d of downloads.values()) { loaded += d.loaded; total += d.total; }
+    if (loaded < total) {
+      showBusy(`下载深度模型 ${(loaded / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`, loaded / total);
+    }
+  } else if (m.type === 'status') {
+    state.device = m.device === 'webgpu' ? 'WebGPU' : 'CPU';
+  } else if (m.type === 'result' || m.type === 'error') {
+    const job = jobs.get(m.id);
+    if (!job) return;
+    jobs.delete(m.id);
+    if (m.type === 'result') job.resolve(m);
+    else job.reject(new Error(m.message));
+  }
 };
 
 // ---------------------------------------------------------------- panel
 
-const SLIDERS = [
+const PHOTO_SLIDERS = [
   { key: 'far', label: '远处距离', min: 4, max: 80, step: 1, unit: ' m' },
   { key: 'near', label: '近处距离', min: 0.3, max: 6, step: 0.1, unit: ' m' },
   { key: 'fov', label: '视场角', min: 30, max: 110, step: 1, unit: '°' },
@@ -38,10 +85,21 @@ const SLIDERS = [
   { key: 'shadowTone', label: '影子明度', min: 0, max: 0.2, step: 0.01, unit: '' },
 ];
 
+const VIDEO_SLIDERS = [
+  { key: 'far', label: '远处距离', min: 4, max: 80, step: 1, unit: ' m' },
+  { key: 'near', label: '近处距离', min: 0.3, max: 6, step: 0.1, unit: ' m' },
+  { key: 'fov', label: '视场角', min: 30, max: 110, step: 1, unit: '°' },
+  { key: 'jump', label: '断裂阈值', min: 0.04, max: 0.4, step: 0.01, unit: '' },
+];
+
 function renderPanel() {
   panel.innerHTML = '';
-  for (const s of SLIDERS) panel.appendChild(sliderRow(s, state.params[s.key], (v) => {
-    state.params[s.key] = v;
+  if (state.mode === 'video') renderVideoControls();
+
+  const sliders = state.mode === 'video' ? VIDEO_SLIDERS : PHOTO_SLIDERS;
+  const target = state.mode === 'video' ? state.timeParams : state.params;
+  for (const s of sliders) panel.appendChild(sliderRow(s, target[s.key], (v) => {
+    target[s.key] = v;
     scheduleRebuild();
   }));
   panel.appendChild(sliderRow({ label: '粒子大小', min: 0.6, max: 3, step: 0.05, unit: '' }, state.sizeMul, (v) => {
@@ -57,33 +115,51 @@ function renderPanel() {
   res.className = 'row';
   res.innerHTML = '<label><span>精度（粒子数）</span></label>';
   const sel = document.createElement('select');
-  for (const r of [384, 512, 640, 800, 1024]) {
+  const options = state.mode === 'video' ? [256, 384, 480, 640] : [384, 512, 640, 800, 1024];
+  const current = state.mode === 'video' ? state.videoResolution : state.resolution;
+  const def = state.mode === 'video' ? 480 : 640;
+  for (const r of options) {
     const o = document.createElement('option');
     o.value = r;
-    o.textContent = `${r} px` + (r === 640 ? '（默认）' : r >= 800 ? '（电脑）' : '');
-    if (r === state.resolution) o.selected = true;
+    o.textContent = `${r} px` + (r === def ? '（默认）' : r > def ? '（电脑）' : '');
+    if (r === current) o.selected = true;
     sel.appendChild(o);
   }
   sel.onchange = () => {
-    state.resolution = Number(sel.value);
-    runDepth();
+    if (state.mode === 'video') {
+      state.videoResolution = Number(sel.value);
+      processVideo();
+    } else {
+      state.resolution = Number(sel.value);
+      processPhoto();
+    }
   };
   res.appendChild(sel);
   panel.appendChild(res);
 
   const checks = document.createElement('div');
   checks.className = 'checks';
-  const names = { photo: '照片', shadow: '影子', ash: '灰烬' };
-  for (const [k, label] of Object.entries(names)) {
-    checks.appendChild(checkbox(label, state.layers[k], (on) => {
-      state.layers[k] = on;
-      viewer.setLayerVisible(k, on);
+  if (state.mode === 'video') {
+    const names = { frames: '当下', plate: '别处时刻' };
+    for (const [k, label] of Object.entries(names)) {
+      checks.appendChild(checkbox(label, state.videoLayers[k], (on) => {
+        state.videoLayers[k] = on;
+        viewer.setLayerVisible(k, on);
+      }));
+    }
+  } else {
+    const names = { photo: '照片', shadow: '影子', ash: '灰烬' };
+    for (const [k, label] of Object.entries(names)) {
+      checks.appendChild(checkbox(label, state.layers[k], (on) => {
+        state.layers[k] = on;
+        viewer.setLayerVisible(k, on);
+      }));
+    }
+    checks.appendChild(checkbox('微光', state.shimmer, (on) => {
+      state.shimmer = on;
+      viewer.setShimmer(on);
     }));
   }
-  checks.appendChild(checkbox('微光', state.shimmer, (on) => {
-    state.shimmer = on;
-    viewer.setShimmer(on);
-  }));
   panel.appendChild(checks);
 
   const stats = document.createElement('div');
@@ -93,6 +169,67 @@ function renderPanel() {
   renderStats();
 }
 
+let anchorInput = null, anchorOut = null;
+
+function renderVideoControls() {
+  const t = state.time;
+  const clip = state.clip;
+  const fmax = clip ? clip.frames.length - 1 : 1;
+
+  const modeRow = document.createElement('div');
+  modeRow.className = 'row';
+  modeRow.innerHTML = '<label><span>时间模式</span></label>';
+  const modeSel = document.createElement('select');
+  for (const [v, label] of [[0, '以拍摄点为此刻：走近 = 未来，走远 = 过去'], [1, '光速很慢：越远越是过去']]) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = label;
+    if (v === t.mode) o.selected = true;
+    modeSel.appendChild(o);
+  }
+  modeSel.onchange = () => {
+    t.mode = Number(modeSel.value);
+    viewer.setTime({ mode: t.mode });
+  };
+  modeRow.appendChild(modeSel);
+  panel.appendChild(modeRow);
+
+  panel.appendChild(sliderRow({ label: '光速', min: 0.2, max: 10, step: 0.1, unit: ' m/s' }, t.c, (v) => {
+    t.c = v;
+    viewer.setTime({ c: v });
+  }));
+
+  const toSec = (f) => (clip ? (f + 0.5) / clip.fps : 0);
+  const row = sliderRow({ label: '此刻', min: 0, max: fmax, step: 0.01, unit: '', format: (v) => `${toSec(v).toFixed(2)} s` }, t.anchor, (v) => {
+    t.anchor = v;
+    viewer.setTime({ anchor: v });
+  });
+  anchorInput = row.querySelector('input');
+  anchorOut = row.querySelector('output');
+  panel.appendChild(row);
+
+  panel.appendChild(sliderRow({ label: '异时色调', min: 0, max: 1, step: 0.05, unit: '' }, t.ghost, (v) => {
+    t.ghost = v;
+    viewer.setTime({ ghost: v });
+  }));
+
+  const flow = document.createElement('div');
+  flow.className = 'checks';
+  flow.appendChild(checkbox('让此刻流动', t.flow, (on) => {
+    t.flow = on;
+    viewer.setTime({ flow: on });
+  }));
+  panel.appendChild(flow);
+}
+
+viewer.onTime = (a) => {
+  state.time.anchor = a;
+  if (anchorInput && !panel.classList.contains('hidden')) {
+    anchorInput.value = a;
+    if (state.clip) anchorOut.textContent = `${((a + 0.5) / state.clip.fps).toFixed(2)} s`;
+  }
+};
+
 function sliderRow(s, value, onInput) {
   const row = document.createElement('div');
   row.className = 'row';
@@ -100,7 +237,7 @@ function sliderRow(s, value, onInput) {
   const name = document.createElement('span');
   name.textContent = s.label;
   const out = document.createElement('output');
-  const fmt = (v) => `${Number(v).toFixed(s.step < 0.1 ? 2 : s.step < 1 ? 1 : 0)}${s.unit}`;
+  const fmt = s.format || ((v) => `${Number(v).toFixed(s.step < 0.1 ? 2 : s.step < 1 ? 1 : 0)}${s.unit}`);
   out.textContent = fmt(value);
   label.append(name, out);
   const input = document.createElement('input');
@@ -128,9 +265,14 @@ function renderStats() {
   if (!el || !state.stats) return;
   const s = state.stats;
   const k = (n) => (n / 1000).toFixed(0) + 'k';
-  el.textContent = `照片 ${k(s.photo)} · 影子 ${k(s.shadow)} · 灰烬 ${k(s.ash)} · 断裂 ${k(s.tears)}\n` +
-    `深度 ${s.depthMs.toFixed(0)} ms（${state.device}）· 生成 ${s.buildMs.toFixed(0)} ms`;
   el.style.whiteSpace = 'pre-line';
+  if (s.kind === 'video') {
+    el.textContent = `${s.frames} 帧 · ${s.duration.toFixed(1)} s · 每帧 ${k(s.points)} 粒子\n` +
+      `深度 ${(s.depthMs / 1000).toFixed(1)} s（${state.device}）· 生成 ${s.buildMs.toFixed(0)} ms`;
+  } else {
+    el.textContent = `照片 ${k(s.photo)} · 影子 ${k(s.shadow)} · 灰烬 ${k(s.ash)} · 断裂 ${k(s.tears)}\n` +
+      `深度 ${s.depthMs.toFixed(0)} ms（${state.device}）· 生成 ${s.buildMs.toFixed(0)} ms`;
+  }
 }
 
 // ---------------------------------------------------------------- flow
@@ -155,21 +297,57 @@ function showError(msg) {
   el.textContent = msg;
 }
 
-async function loadImage(source) {
-  intro.classList.add('hidden');
-  showBusy('读取照片');
-  try {
-    const blob = source instanceof Blob ? source : await (await fetch(source)).blob();
-    state.bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-  } catch (err) {
-    console.error(err);
-    showError('这张图片浏览器读不了（比如 HEIC 格式）。换成 JPG 或 PNG 试试。');
-    return;
-  }
-  runDepth();
+function showScene() {
+  busy.classList.add('hidden');
+  hud.classList.remove('hidden');
+  $('hint').textContent = hintText();
 }
 
-function runDepth() {
+function hintText() {
+  const touch = matchMedia('(pointer: coarse)').matches;
+  const move = touch
+    ? '单指拖动看四周 · 双指张合前进后退 · 双指平移侧移'
+    : '拖动看四周 · WASD / 滚轮 移动 · Q E 升降';
+  return state.mode === 'video' ? `${move} · 你走动，时间就跟着走` : move;
+}
+
+const isVideo = (blob, name = '') => blob.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|ogv)$/i.test(name);
+
+async function loadMedia(source) {
+  const token = ++state.loadToken;
+  intro.classList.add('hidden');
+  showBusy('读取文件');
+  let blob;
+  try {
+    blob = source instanceof Blob ? source : await (await fetch(source)).blob();
+  } catch (err) {
+    console.error(err);
+    showError('读取失败，换一个文件试试。');
+    return;
+  }
+  if (token !== state.loadToken) return;
+  const name = source instanceof File ? source.name : String(source);
+  if (isVideo(blob, name)) {
+    state.mode = 'video';
+    state.videoBlob = blob;
+    renderPanel();
+    processVideo();
+  } else {
+    state.mode = 'photo';
+    try {
+      state.bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+    } catch (err) {
+      console.error(err);
+      showError('这个文件浏览器读不了（比如 HEIC 格式）。换成 JPG、PNG 或 MP4 试试。');
+      return;
+    }
+    renderPanel();
+    processPhoto();
+  }
+}
+
+async function processPhoto() {
+  const token = ++state.loadToken;
   const bmp = state.bitmap;
   if (!bmp) return;
   const scale = Math.min(1, state.resolution / Math.max(bmp.width, bmp.height));
@@ -182,33 +360,48 @@ function runDepth() {
   ctx.drawImage(bmp, 0, 0, w, h);
   const rgba = ctx.getImageData(0, 0, w, h).data;
 
-  const id = ++state.jobId;
-  state.pending = { id, width: w, height: h, rgba };
   showBusy('准备深度模型');
-  worker.postMessage({ id, width: w, height: h, pixels: rgba.slice() });
-}
-
-const downloads = new Map();
-worker.onmessage = (e) => {
-  const m = e.data;
-  if (m.type === 'progress') {
-    downloads.set(m.file, m);
-    let loaded = 0, total = 0;
-    for (const d of downloads.values()) { loaded += d.loaded; total += d.total; }
-    showBusy(`下载深度模型 ${(loaded / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`, loaded / total);
-  } else if (m.type === 'status') {
-    state.device = m.device === 'webgpu' ? 'WebGPU' : 'CPU';
-    if (m.key === 'estimating') showBusy(`估计深度（${state.device}）`);
-  } else if (m.type === 'result') {
-    if (m.id !== state.jobId) return;
-    state.depth = { width: m.width, height: m.height, rgba: state.pending.rgba, disparity: m.disparity };
+  try {
+    const m = await estimateDepth(w, h, rgba);
+    if (token !== state.loadToken) return;
+    state.depth = { width: w, height: h, rgba, disparity: m.disparity };
     state.depthMs = m.ms;
     rebuild();
-  } else if (m.type === 'error') {
-    console.error(m.message);
-    showError('深度估计失败：' + m.message);
+  } catch (err) {
+    console.error(err);
+    showError('深度估计失败：' + err.message);
   }
-};
+}
+
+async function processVideo() {
+  const token = ++state.loadToken;
+  try {
+    showBusy('抽取画面', 0);
+    const clip = await extractFrames(state.videoBlob, { maxSide: state.videoResolution }, (i, n) => {
+      if (token === state.loadToken) showBusy(`抽取画面 ${i} / ${n}`, i / n);
+    });
+    if (token !== state.loadToken) return;
+
+    showBusy('准备深度模型');
+    const disparities = [];
+    const t0 = performance.now();
+    for (let i = 0; i < clip.frames.length; i++) {
+      const m = await estimateDepth(clip.width, clip.height, clip.frames[i]);
+      if (token !== state.loadToken) return;
+      disparities.push(m.disparity);
+      showBusy(`估计深度 ${i + 1} / ${clip.frames.length}（${state.device}）`, (i + 1) / clip.frames.length);
+    }
+    state.clip = { ...clip, disparities };
+    state.depthMs = performance.now() - t0;
+    state.time.anchor = Math.round((clip.frames.length - 1) / 2);
+    viewer.setTime({ ...state.time });
+    renderPanel();
+    rebuild();
+  } catch (err) {
+    console.error(err);
+    showError('这段视频处理失败：' + err.message + '。换成 MP4 或更短的视频试试。');
+  }
+}
 
 let rebuildTimer = 0;
 function scheduleRebuild() {
@@ -217,30 +410,40 @@ function scheduleRebuild() {
 }
 
 function rebuild() {
-  if (!state.depth) return;
+  if (state.mode === 'video' ? !state.clip : !state.depth) return;
   showBusy('凝固中');
-  // let the busy text paint before the synchronous build
-  requestAnimationFrame(() => setTimeout(() => {
+  // let the busy text paint before the synchronous build (no rAF: it stalls in background tabs)
+  setTimeout(() => {
     const t0 = performance.now();
-    const built = buildScene(state.depth, state.params);
-    const buildMs = performance.now() - t0;
-    viewer.setScene(built);
-    for (const [k, on] of Object.entries(state.layers)) viewer.setLayerVisible(k, on);
-    state.stats = {
-      photo: built.photo.count, shadow: built.shadow.count, ash: built.ash.count,
-      tears: built.meta.tears, depthMs: state.depthMs || 0, buildMs,
-    };
+    if (state.mode === 'video') {
+      const tf = buildTimeField(state.clip, state.timeParams);
+      const buildMs = performance.now() - t0;
+      viewer.setTimeField(tf);
+      for (const [k, on] of Object.entries(state.videoLayers)) viewer.setLayerVisible(k, on);
+      state.stats = {
+        kind: 'video', frames: tf.frames, duration: state.clip.duration,
+        points: tf.width * tf.height, depthMs: state.depthMs || 0, buildMs,
+      };
+    } else {
+      const built = buildScene(state.depth, state.params);
+      const buildMs = performance.now() - t0;
+      viewer.setScene(built);
+      for (const [k, on] of Object.entries(state.layers)) viewer.setLayerVisible(k, on);
+      state.stats = {
+        kind: 'photo', photo: built.photo.count, shadow: built.shadow.count, ash: built.ash.count,
+        tears: built.meta.tears, depthMs: state.depthMs || 0, buildMs,
+      };
+    }
     renderStats();
-    busy.classList.add('hidden');
-    hud.classList.remove('hidden');
-  }, 16));
+    showScene();
+  }, 30);
 }
 
 // ---------------------------------------------------------------- input wiring
 
 const fileInput = $('file');
 fileInput.onchange = () => {
-  if (fileInput.files[0]) loadImage(fileInput.files[0]);
+  if (fileInput.files[0]) loadMedia(fileInput.files[0]);
   fileInput.value = '';
 };
 
@@ -253,11 +456,11 @@ window.addEventListener('drop', (e) => {
   e.preventDefault();
   drop.classList.remove('over');
   const f = e.dataTransfer.files[0];
-  if (f) loadImage(f);
+  if (f) loadMedia(f);
 });
 window.addEventListener('paste', (e) => {
   const item = [...e.clipboardData.items].find((i) => i.type.startsWith('image/'));
-  if (item) loadImage(item.getAsFile());
+  if (item) loadMedia(item.getAsFile());
 });
 
 $('btn-new').onclick = () => fileInput.click();
@@ -276,15 +479,12 @@ viewer.onMove = (d) => {
   distEl.textContent = r < 0.1 ? '站在拍摄点' : `距拍摄点 ${r.toFixed(1)} m`;
 };
 
-if (matchMedia('(pointer: coarse)').matches) {
-  $('hint').textContent = '单指拖动看四周 · 双指张合前进后退 · 双指平移侧移';
-}
-
+$('hint').textContent = hintText();
 renderPanel();
 
-// ?src=<image url> loads an image directly (handy for sharing examples and for testing)
+// ?src=<image or video url> loads a file directly (handy for sharing examples and for testing)
 const src = new URLSearchParams(location.search).get('src');
-if (src) loadImage(src);
+if (src) loadMedia(src);
 
 // exposed for tinkering from the devtools console
 window.atom = { viewer, state, rebuild };
