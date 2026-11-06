@@ -1,86 +1,63 @@
 import { PRESETS } from './timemodel.js';
 
-// A small Minkowski diagram: lateral space (world x) across, clip time upwards.
-// Shows the clip as a block of spacetime, your worldline through it, the light cone,
-// and the line of moments you currently see as "now".
+// A tiny Minkowski sketch for the print's bottom margin: lateral space across, clip time upwards.
+// Only three marks: the light cone through you (faint), the line of moments you currently see as
+// "now" (it tilts as you move), and you. Your height in the sketch is how far now has run.
 
-const X_RANGE = 12; // metres either side of the origin
+const X_RANGE = 12; // metres either side of you
 
-export function drawDiagram(canvas, model, pos, trail) {
+export function drawDiagram(canvas, model, pos) {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const size = 160;
-  if (canvas.width !== size * dpr) {
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
+  const w = canvas.clientWidth || 64, h = canvas.clientHeight || 34;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
   }
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, size, size);
+  ctx.clearRect(0, 0, w, h);
 
-  const pad = 14;
-  const w = size - pad * 2, h = size - pad * 2;
+  const pad = 3;
   const dur = Math.max(model.duration, 1e-3);
-  const sx = (x) => pad + ((x + X_RANGE) / (2 * X_RANGE)) * w;
-  const sy = (t) => pad + h - (t / dur) * h;
+  const cx = w / 2;
+  const cy = pad + (h - 2 * pad) * (1 - Math.min(1, Math.max(0, model.t0 / dur)));
+  const sx = (dx) => cx + (dx / X_RANGE) * (w / 2 - pad);
+  const sy = (dt) => cy - (dt / dur) * (h - 2 * pad);
 
-  // the clip: every moment that was recorded
-  ctx.fillStyle = 'rgba(216, 210, 198, 0.06)';
-  ctx.fillRect(pad, pad, w, h);
-  ctx.strokeStyle = 'rgba(216, 210, 198, 0.25)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(pad + 0.5, pad + 0.5, w - 1, h - 1);
-
-  ctx.fillStyle = 'rgba(216, 210, 198, 0.55)';
-  ctx.font = '9px -apple-system, sans-serif';
-  ctx.fillText('x', size - pad + 3, size - pad + 3);
-  ctx.fillText('t', pad - 9, pad + 3);
-
-  const x0 = pos[0], t0 = model.t0;
-
-  // light cone through your position
   ctx.save();
-  ctx.setLineDash([2, 3]);
-  ctx.strokeStyle = 'rgba(216, 210, 198, 0.3)';
-  const reach = X_RANGE * 2;
+  ctx.beginPath();
+  ctx.rect(0, 0, w, h);
+  ctx.clip();
+  ctx.lineCap = 'round';
+
+  // light cone
+  ctx.strokeStyle = 'rgba(230, 225, 214, 0.22)';
+  ctx.lineWidth = 0.8;
   for (const s of [1, -1]) {
     ctx.beginPath();
-    ctx.moveTo(sx(x0 - reach), sy(t0 - (s * reach) / model.c));
-    ctx.lineTo(sx(x0 + reach), sy(t0 + (s * reach) / model.c));
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  // your worldline
-  if (trail.length > 1) {
-    ctx.strokeStyle = 'rgba(216, 210, 198, 0.7)';
-    ctx.beginPath();
-    // a loop jumps from the end back to the start: break the line there
-    trail.forEach(([x, t], i) => (i && Math.abs(t - trail[i - 1][1]) < dur / 2 ? ctx.lineTo(sx(x), sy(t)) : ctx.moveTo(sx(x), sy(t))));
+    ctx.moveTo(sx(-X_RANGE), sy((-s * X_RANGE) / model.c));
+    ctx.lineTo(sx(X_RANGE), sy((s * X_RANGE) / model.c));
     ctx.stroke();
   }
 
-  // what you see as "now", along x (same formula as the shader, restricted to one axis)
+  // now, as you see it (same formula as the shader, along x)
   const p = PRESETS[model.preset];
   const slope = model.tiltSlope(model.v[0]);
-  ctx.save();
+  ctx.strokeStyle = 'rgba(216, 180, 138, 0.95)';
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
-  ctx.rect(pad, pad, w, h);
-  ctx.clip();
-  ctx.strokeStyle = '#d8b48a';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  for (let i = 0; i <= 48; i++) {
-    const x = -X_RANGE + (i / 48) * 2 * X_RANGE;
-    const dx = x - x0;
-    const t = t0 + slope * dx - p.delay * Math.abs(dx) / model.c + p.rel * (Math.abs(x) - Math.abs(dx)) / model.c;
-    i ? ctx.lineTo(sx(x), sy(t)) : ctx.moveTo(sx(x), sy(t));
+  for (let i = 0; i <= 24; i++) {
+    const dx = -X_RANGE + (i / 24) * 2 * X_RANGE;
+    const x = pos[0] + dx;
+    const dt = slope * dx - (p.delay * Math.abs(dx)) / model.c + (p.rel * (Math.abs(x) - Math.abs(dx))) / model.c;
+    i ? ctx.lineTo(sx(dx), sy(dt)) : ctx.moveTo(sx(dx), sy(dt));
   }
   ctx.stroke();
   ctx.restore();
 
   // you
-  ctx.fillStyle = '#f2ece2';
+  ctx.fillStyle = '#efe9de';
   ctx.beginPath();
-  ctx.arc(sx(x0), sy(t0), 2.5, 0, Math.PI * 2);
+  ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
   ctx.fill();
 }

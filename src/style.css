@@ -148,10 +148,22 @@ html, body {
   z-index: 2;
 }
 
+/* a tiny Minkowski sketch in the bottom margin, centred between the two labels */
+#diagram {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--mb) * 0.36 + env(safe-area-inset-bottom) - 2px);
+  width: 64px;
+  height: 34px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 2;
+}
+
 @media (max-width: 560px) {
   :root { --mb: 124px; }
   .margin { bottom: calc(var(--mb) * 0.44 + env(safe-area-inset-bottom)); }
-  #diagram { width: 96px; height: 96px; bottom: auto; top: 12px; right: 10px; }
+  #diagram { bottom: calc(var(--mb) * 0.44 + env(safe-area-inset-bottom) - 2px); }
 }
 
 /* ------------------------------------------------------------------ front: the moment */
@@ -232,16 +244,6 @@ h1 {
 }
 #dist, #tstat { color: var(--fg); font-variant-numeric: tabular-nums; }
 
-#diagram {
-  position: absolute;
-  right: 12px;
-  bottom: 36px;
-  width: 140px;
-  height: 140px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  backdrop-filter: blur(6px);
-}
 
 /* ------------------------------------------------------------------ back: the paper */
 /* Everything on the back is written by hand in pencil: text, sliders, ticks, underlines. */

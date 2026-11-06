@@ -307,7 +307,6 @@ function renderVideoControls() {
 
 const diagramEl = $('diagram');
 const tstatEl = $('tstat');
-const trail = [];
 let hudClock = 0;
 
 viewer.onTick = (dt, pos) => {
@@ -319,11 +318,7 @@ viewer.onTick = (dt, pos) => {
   viewer.setTime(u);
   viewer.setBackgroundFrame(u.anchor);
 
-  const last = trail[trail.length - 1];
-  if (!last || Math.abs(last[0] - p[0]) > 0.02 || Math.abs(last[1] - model.t0) > 0.01) {
-    trail.push([p[0], model.t0]);
-    if (trail.length > 600) trail.shift();
-  }
+  if (state.time.diagram) drawDiagram(diagramEl, model, p);
 
   hudClock += dt;
   if (hudClock < 0.1) return;
@@ -334,7 +329,6 @@ viewer.onTick = (dt, pos) => {
     anchorInput.value = model.t0;
     anchorOut.textContent = `${model.t0.toFixed(2)} s`;
   }
-  if (state.time.diagram) drawDiagram(diagramEl, model, p, trail);
 };
 
 function sliderRow(s, value, onInput) {
@@ -510,7 +504,6 @@ async function processVideo() {
     state.depthMs = performance.now() - t0;
     model.configure(clip.duration, clip.fps);
     observer.reset();
-    trail.length = 0;
     viewer.setTime({ ghost: state.time.ghost, tint: state.time.tint });
     renderPanel();
     rebuild();
@@ -625,7 +618,6 @@ $('btn-new').onclick = () => fileInput.click();
 $('btn-home').onclick = () => {
   viewer.resetView();
   model.reset(observer.walked);
-  trail.length = 0;
 };
 
 const distEl = $('dist');
