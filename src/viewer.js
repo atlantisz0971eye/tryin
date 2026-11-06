@@ -476,6 +476,7 @@ export class Viewer {
     this.lookYaw = 0;
     this.lookPitch = 0;
     this.assist = true;
+    this.motion = null;   // a MotionWalker when walking with the phone
     this.focus = new THREE.Vector3(0, 0, -5);
     this.prevPos = new THREE.Vector3();
     this.keys = new Set();
@@ -617,6 +618,10 @@ export class Viewer {
     return !!this.returning;
   }
 
+  get isWalking() {
+    return !!(this.motion && this.motion.active);
+  }
+
   _makePoints(layer, frag, transparent, isPhoto = false) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(layer.positions, 3));
@@ -720,7 +725,7 @@ export class Viewer {
       const prev = pointers.get(e.pointerId);
       if (!prev) return;
       const cur = { x: e.clientX, y: e.clientY };
-      if (pointers.size === 1) {
+      if (pointers.size === 1 && !this.isWalking) {
         // drag the world, like a panorama
         const k = lookScale();
         this.yaw += (cur.x - prev.x) * k;
@@ -811,9 +816,18 @@ export class Viewer {
       if (r.t >= 1) this.returning = null;
     }
 
+    // walking with the phone: steps carry you where you face
+    const walking = this.isWalking;
+    let step = null;
+    if (walking) {
+      step = this.motion.update(dt);
+      this.pos.x += step.dx;
+      this.pos.z += step.dz;
+    }
+
     // gaze assist: face the subject while moving sideways, so walking becomes orbiting the moment
     let baseYaw = 0, basePitch = 0;
-    if (this.assist) {
+    if (this.assist && !walking) {
       const d = this.focus.clone().sub(this.pos);
       // fade out as you reach the subject, so the view never flips when passing it
       const w = THREE.MathUtils.smoothstep(-d.z, 0.5, 1.5);
@@ -834,7 +848,14 @@ export class Viewer {
     if (this.onTick) this.onTick(dt, this.pos);
 
     this.camera.position.copy(this.pos);
-    this.camera.rotation.set(this.lookPitch, this.lookYaw, 0);
+    if (walking && step.ready) {
+      // the phone is the window: its orientation is the camera's
+      this.camera.quaternion.copy(step.quat);
+      const f = new THREE.Vector3(0, 0, -1).applyQuaternion(step.quat);
+      this.lookYaw = Math.atan2(-f.x, -f.z);
+    } else {
+      this.camera.rotation.set(this.lookPitch, this.lookYaw, 0);
+    }
     this.bg.position.copy(this.pos);
     if (this.onMove) this.onMove(this.pos.length());
     if (this.paused) return;
