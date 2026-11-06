@@ -36,7 +36,7 @@ const state = {
   clip: null,         // { width, height, frames, disparities, fps, duration }
   timeParams: { ...TIME_DEFAULTS },
   time: { ghost: 0.6, tint: 0.6, diagram: true },
-  videoLayers: { frames: true, plate: true },
+  videoLayers: { frames: true, plate: true, photo: true, actors: true, shadow: true, ash: true },
   // shared
   sizeMul: 1.4,
   bleach: 0,
@@ -116,16 +116,15 @@ const VIDEO_SLIDERS = [
 function renderPanel() {
   panel.innerHTML = '';
   if (state.mode === 'video') renderVideoControls();
-  else {
-    panel.appendChild(selectRow('surface', { mesh: 'surface.mesh', particles: 'surface.particles' }, state.surface, (v) => {
-      state.surface = v;
-      viewer.setRenderMode(v);
-    }));
-    panel.appendChild(sliderRow({ label: 'stretch', min: 2, max: 40, step: 1, unit: '' }, state.stretch, (v) => {
-      state.stretch = v;
-      viewer.setStretch(v);
-    }));
-  }
+  panel.appendChild(selectRow('surface', { mesh: 'surface.mesh', particles: 'surface.particles' }, state.surface, (v) => {
+    state.surface = v;
+    viewer.setRenderMode(v);
+    renderPanel();   // the layer list depends on the surface
+  }));
+  panel.appendChild(sliderRow({ label: 'stretch', min: 2, max: 40, step: 1, unit: '' }, state.stretch, (v) => {
+    state.stretch = v;
+    viewer.setStretch(v);
+  }));
 
   const sliders = state.mode === 'video' ? VIDEO_SLIDERS : PHOTO_SLIDERS;
   const target = state.mode === 'video' ? state.timeParams : state.params;
@@ -209,7 +208,9 @@ function renderPanel() {
   const checks = document.createElement('div');
   checks.className = 'checks';
   if (state.mode === 'video') {
-    const names = { frames: 'layer.frames', plate: 'layer.plate' };
+    const names = state.surface === 'mesh'
+      ? { photo: 'layer.world', actors: 'layer.actors', shadow: 'layer.shadow', ash: 'layer.ash' }
+      : { frames: 'layer.frames', plate: 'layer.plate' };
     for (const [k, label] of Object.entries(names)) {
       checks.appendChild(checkbox(label, state.videoLayers[k], (on) => {
         state.videoLayers[k] = on;
@@ -598,6 +599,22 @@ function scheduleRebuild() {
   rebuildTimer = setTimeout(rebuild, 180);
 }
 
+// The static world of a video, built like a photo: a mesh from the steady depth, textured with the
+// clean plate. Returns what the viewer needs: the scene and a canvas holding the plate.
+function makeWorld(tf) {
+  const { width, height } = tf;
+  const p = state.timeParams;
+  const built = buildScene(
+    { width, height, rgba: tf.world.rgba, depth: tf.world.depth },
+    { ...state.params, fov: p.fov, near: p.near, far: p.far, jump: p.jump, photo: false },
+  );
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(tf.world.rgba), width, height), 0, 0);
+  return { built, canvas };
+}
+
 function rebuild() {
   if (state.mode === 'video' ? !state.clip : !state.depth) return;
   showBusy(tr('busy.freeze'));
@@ -607,7 +624,8 @@ function rebuild() {
     if (state.mode === 'video') {
       const tf = buildTimeField(state.clip, state.timeParams);
       const buildMs = performance.now() - t0;
-      viewer.setTimeField(tf);
+      viewer.setTimeField(tf, makeWorld(tf));
+      viewer.setRenderMode(state.surface);
       model.setDepthStats(tf.depthStats, model.depthStats ? undefined : defaultPace());
       viewer.setFocusDepth(tf.depthStats.median);
       state.walkRange = model.calib ? model.calib.range : 3;
