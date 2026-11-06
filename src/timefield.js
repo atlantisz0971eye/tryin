@@ -9,7 +9,34 @@ export const TIME_DEFAULTS = {
   far: 25,
   fov: 65,
   jump: 0.12,
+  plateRank: 2,   // the plate takes the (rank+1)-th farthest depth seen, so a single noisy frame cannot set it
+  steady: true,   // keep the depth of things that do not move constant over time
 };
+
+// The background does not move, so neither should its depth. For every pixel, find the frames in
+// which it looks like its usual self (luma close to its temporal median) and give those frames the
+// median depth of those frames. Whatever moves through keeps its own per-frame depth.
+function steadyBackground(depth, frames, N, F) {
+  const lum = new Float32Array(F), sorted = new Float32Array(F), pool = new Float32Array(F);
+  const THRESHOLD = 22;
+  for (let i = 0; i < N; i++) {
+    const o = i * 4;
+    for (let k = 0; k < F; k++) {
+      const fr = frames[k];
+      lum[k] = 0.299 * fr[o] + 0.587 * fr[o + 1] + 0.114 * fr[o + 2];
+    }
+    sorted.set(lum);
+    sorted.sort();
+    const med = sorted[F >> 1];
+    let n = 0;
+    for (let k = 0; k < F; k++) if (Math.abs(lum[k] - med) < THRESHOLD) pool[n++] = depth[k][i];
+    if (n < F * 0.4) continue; // mostly something that moves: leave it alone
+    const part = pool.subarray(0, n);
+    part.sort();
+    const bg = part[n >> 1];
+    for (let k = 0; k < F; k++) if (Math.abs(lum[k] - med) < THRESHOLD) depth[k][i] = bg;
+  }
+}
 
 function percentile(sample, q) {
   const s = Float32Array.from(sample).sort();
@@ -96,6 +123,9 @@ export function buildTimeField(input, opts = {}) {
     return out;
   });
 
+  // 3b. steady depth for everything that stays put
+  if (P.steady) steadyBackground(smooth, frames, N, F);
+
   // 4. snap the smeared "flying pixels" at depth tears to one side
   const snap = (src) => {
     const out = Float32Array.from(src);
@@ -120,17 +150,30 @@ export function buildTimeField(input, opts = {}) {
 
   const depth = new Float32Array(N * F);
   const color = new Uint8Array(N * F * 4);
-  const plateL = new Float32Array(N).fill(-Infinity);
-  const plateFrame = new Uint8Array(N);
+  // the three farthest depths seen at each pixel, and the frames they came from
+  const top = [0, 1, 2].map(() => new Float32Array(N).fill(-Infinity));
+  const topFrame = [0, 1, 2].map(() => new Uint8Array(N));
   for (let k = 0; k < F; k++) {
     const l = snap(smooth[k]);
     const off = k * N;
     for (let i = 0; i < N; i++) {
-      depth[off + i] = Math.exp(l[i]);
-      if (l[i] > plateL[i]) { plateL[i] = l[i]; plateFrame[i] = k; }
+      const v = l[i];
+      depth[off + i] = Math.exp(v);
+      if (v > top[0][i]) {
+        top[2][i] = top[1][i]; topFrame[2][i] = topFrame[1][i];
+        top[1][i] = top[0][i]; topFrame[1][i] = topFrame[0][i];
+        top[0][i] = v; topFrame[0][i] = k;
+      } else if (v > top[1][i]) {
+        top[2][i] = top[1][i]; topFrame[2][i] = topFrame[1][i];
+        top[1][i] = v; topFrame[1][i] = k;
+      } else if (v > top[2][i]) {
+        top[2][i] = v; topFrame[2][i] = k;
+      }
     }
     color.set(frames[k], off * 4);
   }
+  const rank = F >= 6 ? Math.min(2, Math.max(0, P.plateRank | 0)) : 0;
+  const plateL = top[rank], plateFrame = topFrame[rank];
 
   // 5. the plate: farthest surface seen at each pixel, coloured by the moment it was seen
   const plateDepth = new Float32Array(N);
