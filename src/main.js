@@ -313,7 +313,14 @@ function renderVideoControls() {
     c: [cRow.querySelector('input'), cRow.querySelector('output')],
     spm: [spmRow.querySelector('input'), spmRow.querySelector('output')],
   };
-  panel.append(cRow, spmRow);
+  const densityRow = sliderRow({ label: 'density', min: 0, max: 1, step: 0.05, unit: '' }, model.density, (v) => {
+    model.density = v;
+    model.auto = true;
+    autoInput.checked = true;
+    model.recalibrate();
+    syncCalibration();
+  });
+  panel.append(densityRow, cRow, spmRow);
   calibInfo = document.createElement('div');
   calibInfo.className = 'stats';
   panel.appendChild(calibInfo);

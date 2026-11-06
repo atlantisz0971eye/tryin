@@ -33,15 +33,21 @@ const MAX_BETA = 0.95;
 // show a readable effect at a normal walking pace.
 //   R  characteristic distance (median scene depth)     L  walkable range before things get too close
 //   tilt:  walking at v shifts R by a quarter of the clip:  v R / c² = D / 4
-//   delay: the far scene (90th percentile) arrives within 80% of the clip:  R90 / c = 0.8 D
+//   delay: light from the far scene (90th percentile) is about a third of the clip old:  R90 / c = 0.35 D
 //   relative: walking the range L changes distances by about half the clip:  L / c = D / 2
-//   walk:  going across the range and back covers the whole clip:  s/m = D / 2L
-export function calibrate({ median, p90 }, duration, walkSpeed = 1.2) {
+//   walk:  how much clip one metre costs, from real time to filling the clip:
+//          density 0 = real time (1 s of clip per second of walking, s/m = 1 / pace)
+//          density 1 = crossing the walkable range plays the whole clip once (s/m = D / L)
+//          in between is a geometric blend, never faster than 3x real time at walking pace
+export function calibrate({ median, p90 }, duration, walkSpeed = 1.2, density = 0.7) {
   const D = Math.max(duration, 0.5);
   const R = Math.max(median, 0.5);
   const range = Math.min(6, Math.max(1, 0.35 * R));
   const cTilt = Math.max(Math.sqrt((walkSpeed * R) / (0.25 * D)), walkSpeed / 0.7);
-  const cDelay = Math.max(p90, R) / (0.8 * D);
+  const cDelay = Math.max(p90, R) / (0.35 * D);
+  const realSpm = 1 / walkSpeed;
+  const fillSpm = D / range;
+  const blend = Math.exp(Math.log(realSpm) * (1 - density) + Math.log(fillSpm) * density);
   return {
     R,
     range,
@@ -52,7 +58,7 @@ export function calibrate({ median, p90 }, duration, walkSpeed = 1.2) {
       slowLight: cDelay,
       relative: range / (0.5 * D),
     },
-    secondsPerMeter: D / (2 * range),
+    secondsPerMeter: Math.min(blend, 3 / walkSpeed),
   };
 }
 
@@ -75,6 +81,7 @@ export class TimeModel {
     this.auto = true;
     this.depthStats = null;
     this.calib = null;
+    this.density = 0.7;    // 0 = real time per metre walked, 1 = the walkable range spans the clip
     this.speedEst = 1.2;   // typical walking speed, learned while moving
     this.recalClock = 0;
   }
@@ -88,7 +95,7 @@ export class TimeModel {
 
   recalibrate() {
     if (!this.depthStats) return;
-    this.calib = calibrate(this.depthStats, this.duration, this.speedEst);
+    this.calib = calibrate(this.depthStats, this.duration, this.speedEst, this.density);
     if (!this.auto) return;
     this.c = this.calib.c[this.preset];
     this.secondsPerMeter = this.calib.secondsPerMeter;
