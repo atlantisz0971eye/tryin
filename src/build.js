@@ -12,6 +12,7 @@ export const DEFAULTS = {
   jump: 0.12,       // log-depth step treated as a tear between surfaces
   ash: 1.0,         // ash density along silhouette edges
   smoke: 1.0,       // ash density inside the shadow volume
+  shadowTone: 0.07, // brightness of the charred imprint (the void itself is pure black)
   seed: 7,
 };
 
@@ -33,6 +34,7 @@ class Layer {
     this.col = new Float32Array(this.cap * 3);
     this.size = new Float32Array(this.cap);
     this.alpha = new Float32Array(this.cap);
+    this.off = new Float32Array(this.cap * 6);
   }
 
   grow() {
@@ -46,10 +48,13 @@ class Layer {
     this.col = resize(this.col, cap * 3);
     this.size = resize(this.size, cap);
     this.alpha = resize(this.alpha, cap);
+    this.off = resize(this.off, cap * 6);
     this.cap = cap;
   }
 
-  add(x, y, z, r, g, b, size, alpha) {
+  // off: 3D offsets to the right and lower neighbours (6 floats), so the viewer can grow each point
+  // just enough to close the gap once it is seen from a new angle
+  add(x, y, z, r, g, b, size, alpha, off = null) {
     if (this.count === this.cap) this.grow();
     const i = this.count++;
     const j = i * 3;
@@ -57,6 +62,7 @@ class Layer {
     this.col[j] = r; this.col[j + 1] = g; this.col[j + 2] = b;
     this.size[i] = size;
     this.alpha[i] = alpha;
+    if (off) this.off.set(off, i * 6);
   }
 
   finish() {
@@ -67,8 +73,20 @@ class Layer {
       colors: this.col.slice(0, n * 3),
       sizes: this.size.slice(0, n),
       alphas: this.alpha.slice(0, n),
+      offRight: pick(this.off, n, 0),
+      offDown: pick(this.off, n, 3),
     };
   }
+}
+
+function pick(off, n, start) {
+  const out = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    out[i * 3] = off[i * 6 + start];
+    out[i * 3 + 1] = off[i * 6 + start + 1];
+    out[i * 3 + 2] = off[i * 6 + start + 2];
+  }
+  return out;
 }
 
 function percentile(values, q) {
@@ -211,6 +229,26 @@ export function buildScene(input, opts = {}) {
   // Ash never streams off to the sky; it stays near what cast it.
   const ashEnd = (zf, zbv) => (zbv > skyZ ? Math.min(zbv, zf * 2.5) : zbv);
 
+  // 3D offsets to the right / lower neighbour, zero across tears (gaps there are meant to open).
+  // Seen from a new angle, a surface needs points that cover these offsets to stay closed.
+  const offs = new Float32Array(6);
+  const neighbourOffsets = (depth, u, v, fp) => {
+    offs.fill(0);
+    const i = v * W + u;
+    const d = depth[i];
+    const x = rayX(u) * d, y = rayY(v) * d;
+    const put = (k, dn, un, vn) => {
+      if (!(dn > 0) || Math.abs(Math.log(dn / d)) >= P.jump) return;
+      let ox = rayX(un) * dn - x, oy = rayY(vn) * dn - y, oz = d - dn;
+      const len = Math.hypot(ox, oy, oz), cap = fp * 6;
+      if (len > cap) { const s = cap / len; ox *= s; oy *= s; oz *= s; }
+      offs[k] = ox; offs[k + 1] = oy; offs[k + 2] = oz;
+    };
+    if (u + 1 < W) put(0, depth[i + 1], u + 1, v);
+    if (v + 1 < H) put(3, depth[i + W], u, v + 1);
+    return offs;
+  };
+
   // --- photo layer -------------------------------------------------------
   const photo = new Layer(N);
   for (let v = 0; v < H; v++) {
@@ -224,7 +262,7 @@ export function buildScene(input, opts = {}) {
         const k = 0.45 + rand() * 0.4;
         r *= k; g *= k; b *= k;
       }
-      photo.add(rayX(u) * d, rayY(v) * d, -d, r, g, b, d / f, 1);
+      photo.add(rayX(u) * d, rayY(v) * d, -d, r, g, b, d / f, 1, neighbourOffsets(snapZ, u, v, d / f));
     }
   }
 
@@ -235,29 +273,31 @@ export function buildScene(input, opts = {}) {
       const i = v * W + u;
       const d = zb[i];
       if (!(d > 0) || d > skyZ) continue;
-      // charred imprint: a touch lighter and grainier than the empty void, so it reads as a surface
+      // charred imprint: warm charcoal with grain, clearly a surface against the pure black void
       const n = rand();
-      const c = 0.03 + n * n * 0.06;
-      shadow.add(rayX(u) * d, rayY(v) * d, -d, c * 1.12, c * 0.98, c * 0.9, (d / f) * 1.1, 1);
+      const c = P.shadowTone * (0.75 + n * n * 0.9);
+      const fp = (d / f) * 1.1;
+      shadow.add(rayX(u) * d, rayY(v) * d, -d, c * 1.15, c, c * 0.88, fp, 1, neighbourOffsets(zb, u, v, fp));
     }
   }
 
   // --- ash layer ---------------------------------------------------------
   const ash = new Layer(N / 4);
   const addAsh = (rx, ry, d, fp, tNear) => {
-    const jx = (rand() - 0.5) * 4 * fp, jy = (rand() - 0.5) * 4 * fp;
+    const jx = (rand() - 0.5) * 2.5 * fp, jy = (rand() - 0.5) * 2.5 * fp;
+    const fade = 1 - 0.6 * tNear;
     const roll = rand();
     let r, g, b, a;
     if (roll < 0.04) {
       const c = 0.22 + rand() * 0.18; // pale dust catching light
-      r = c; g = c * 0.97; b = c * 0.92; a = 0.18 + rand() * 0.2;
+      r = c; g = c * 0.97; b = c * 0.92; a = (0.15 + rand() * 0.2) * fade;
     } else if (roll < 0.055 && tNear < 0.2) {
-      r = 0.42; g = 0.13 + rand() * 0.05; b = 0.04; a = 0.35; // last embers
+      r = 0.42; g = 0.13 + rand() * 0.05; b = 0.04; a = 0.3; // last embers
     } else {
       const c = 0.03 + Math.pow(rand(), 2) * 0.1;
-      r = c * 1.05; g = c; b = c * 0.95; a = 0.35 + rand() * 0.45;
+      r = c * 1.05; g = c; b = c * 0.95; a = (0.25 + rand() * 0.35) * fade;
     }
-    ash.add(rx * d + jx, ry * d + jy, -d, r, g, b, fp * (1 + rand() * 1.4), a);
+    ash.add(rx * d + jx, ry * d + jy, -d, r, g, b, fp * (0.6 + rand() * 0.9), a);
   };
 
   for (let e = 0; e < tears.length; e += 3) {
@@ -270,14 +310,14 @@ export function buildScene(input, opts = {}) {
     let count = Math.floor(want) + (rand() < want % 1 ? 1 : 0);
     count = Math.min(count, 80);
     for (let s = 0; s < count; s++) {
-      const tt = Math.pow(rand(), 1.5);
+      const tt = Math.pow(rand(), 2.2);
       const d = zf + tt * (zbv - zf);
       addAsh(rx, ry, d, d / f, tt);
     }
   }
 
   // smoke filling the shadow volume behind each occluder
-  const smokeProb = P.smoke * 0.035;
+  const smokeProb = P.smoke * 0.018;
   for (let v = 0; v < H; v++) {
     for (let u = 0; u < W; u++) {
       const i = v * W + u;
@@ -285,11 +325,11 @@ export function buildScene(input, opts = {}) {
       const zf = snapZ[i];
       const zbv = ashEnd(zf, zb[i]);
       if (zbv <= zf) continue;
-      const tt = 0.05 + rand() * 0.9;
+      const tt = 0.03 + Math.pow(rand(), 1.8) * 0.94;
       const d = zf + tt * (zbv - zf);
       const fp = d / f;
       const c = 0.025 + rand() * 0.05;
-      ash.add(rayX(u) * d, rayY(v) * d, -d, c, c, c, fp * (1.5 + rand() * 1.5), 0.12 + rand() * 0.25);
+      ash.add(rayX(u) * d, rayY(v) * d, -d, c, c, c, fp * (1 + rand()), (0.1 + rand() * 0.2) * (1 - 0.7 * tt));
     }
   }
 

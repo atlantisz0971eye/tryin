@@ -4,11 +4,16 @@ const VERT = /* glsl */ `
 attribute vec3 aColor;
 attribute float aSize;
 attribute float aAlpha;
+attribute vec3 aOffR;
+attribute vec3 aOffD;
+uniform vec2 uViewport;
 uniform float uPxScale;
 uniform float uSizeMul;
 uniform float uReveal;
 uniform float uTime;
 uniform float uShimmer;
+uniform float uBleach;
+uniform float uIsPhoto;
 varying vec3 vColor;
 varying float vAlpha;
 
@@ -21,12 +26,29 @@ void main() {
   gl_Position = projectionMatrix * mv;
   float d = -mv.z;
   float h = hash(position);
-  float ps = aSize * uSizeMul * uPxScale / max(d, 0.001);
+  float base = aSize * uSizeMul * uPxScale / max(d, 0.001);
+  // From the original viewpoint each point covers its own pixel. From anywhere else, grow it to the
+  // on-screen distance to its neighbours so surfaces stay closed without smearing.
+  vec2 ndc = gl_Position.xy / gl_Position.w;
+  float gap = 0.0;
+  vec4 pr = projectionMatrix * (modelViewMatrix * vec4(position + aOffR, 1.0));
+  vec4 pd = projectionMatrix * (modelViewMatrix * vec4(position + aOffD, 1.0));
+  if (pr.w > 0.0) gap = max(gap, length((pr.xy / pr.w - ndc) * uViewport * 0.5));
+  if (pd.w > 0.0) gap = max(gap, length((pd.xy / pd.w - ndc) * uViewport * 0.5));
+  float ps = max(base, min(gap * 1.15, base * 4.0));
   ps *= smoothstep(h * 0.6, h * 0.6 + 0.4, uReveal);
   vAlpha = aAlpha * (1.0 - uShimmer * 0.45 * (0.5 + 0.5 * sin(uTime * 0.6 + h * 40.0)));
   if (ps < 1.0) { vAlpha *= ps; ps = 1.0; }
   gl_PointSize = d < 0.03 ? 0.0 : min(ps, 96.0);
   vColor = aColor;
+  if (uIsPhoto > 0.5 && uBleach > 0.0) {
+    // flash bleach: the further from the moment's viewpoint, the more the world is burnt pale,
+    // leaving the shadows as the only thing that keeps its darkness
+    float amt = uBleach * smoothstep(0.2, 3.0, length(cameraPosition));
+    float lum = dot(aColor, vec3(0.299, 0.587, 0.114));
+    vec3 pale = mix(vec3(lum), vec3(0.93, 0.91, 0.86), 0.3 + 0.5 * lum);
+    vColor = mix(aColor, pale, amt);
+  }
 }
 `;
 
@@ -56,7 +78,7 @@ export class Viewer {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setClearColor(0x050505, 1);
+    this.renderer.setClearColor(0x000000, 1);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.02, 500);
@@ -68,6 +90,8 @@ export class Viewer {
       uReveal: { value: 0 },
       uTime: { value: 0 },
       uShimmer: { value: 1 },
+      uBleach: { value: 0 },
+      uViewport: { value: new THREE.Vector2(1, 1) },
     };
     this.layers = {};
     this.revealStart = 0;
@@ -92,7 +116,7 @@ export class Viewer {
       obj.geometry.dispose();
     }
     this.layers = {
-      photo: this._makePoints(built.photo, FRAG_SOLID, false),
+      photo: this._makePoints(built.photo, FRAG_SOLID, false, true),
       shadow: this._makePoints(built.shadow, FRAG_SOLID, false),
       ash: this._makePoints(built.ash, FRAG_ASH, true),
     };
@@ -102,14 +126,17 @@ export class Viewer {
     this.revealStart = this.timer.getElapsed();
   }
 
-  _makePoints(layer, frag, transparent) {
+  _makePoints(layer, frag, transparent, isPhoto = false) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(layer.positions, 3));
     geo.setAttribute('aColor', new THREE.BufferAttribute(layer.colors, 3));
     geo.setAttribute('aSize', new THREE.BufferAttribute(layer.sizes, 1));
     geo.setAttribute('aAlpha', new THREE.BufferAttribute(layer.alphas, 1));
+    const zero = new Float32Array(layer.count * 3);
+    geo.setAttribute('aOffR', new THREE.BufferAttribute(layer.offRight || zero, 3));
+    geo.setAttribute('aOffD', new THREE.BufferAttribute(layer.offDown || zero, 3));
     const mat = new THREE.ShaderMaterial({
-      uniforms: this.uniforms,
+      uniforms: { ...this.uniforms, uIsPhoto: { value: isPhoto ? 1 : 0 } },
       vertexShader: VERT,
       fragmentShader: frag,
       transparent,
@@ -127,6 +154,7 @@ export class Viewer {
 
   setSizeMul(v) { this.uniforms.uSizeMul.value = v; }
   setShimmer(on) { this.uniforms.uShimmer.value = on ? 1 : 0; }
+  setBleach(v) { this.uniforms.uBleach.value = v; }
 
   resetView() {
     this.returning = { from: this.pos.clone(), yaw: this.yaw, pitch: this.pitch, t: 0 };
@@ -138,8 +166,9 @@ export class Viewer {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    const bufH = this.renderer.getDrawingBufferSize(new THREE.Vector2()).y;
-    this.uniforms.uPxScale.value = (this.camera.projectionMatrix.elements[5] * bufH) / 2;
+    const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.uniforms.uViewport.value.copy(buf);
+    this.uniforms.uPxScale.value = (this.camera.projectionMatrix.elements[5] * buf.y) / 2;
   }
 
   _bindInput() {
