@@ -264,21 +264,29 @@ function smoothValid(zb, w, h, r) {
 
 export function buildScene(input, opts = {}) {
   const P = { ...DEFAULTS, ...opts };
-  const { width: W, height: H, rgba, disparity } = input;
+  // input.depth (metres) can be given instead of a relative disparity, e.g. the static world of a video
+  const { width: W, height: H, rgba, disparity, depth: givenDepth } = input;
   const N = W * H;
   const rand = mulberry32(P.seed);
 
-  // Relative disparity -> metric-ish depth, linear in inverse depth between near and far.
-  const lo = percentile(disparity, 0.01);
-  const hi = percentile(disparity, 0.995);
-  const span = Math.max(1e-6, hi - lo);
-  const invNear = 1 / P.near, invFar = 1 / P.far;
   const z = new Float32Array(N);
   const L = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    const dn = Math.min(1, Math.max(0, (disparity[i] - lo) / span));
-    z[i] = 1 / (invFar + dn * (invNear - invFar));
-    L[i] = Math.log(z[i]);
+  if (givenDepth) {
+    for (let i = 0; i < N; i++) {
+      z[i] = givenDepth[i];
+      L[i] = Math.log(z[i]);
+    }
+  } else {
+    // Relative disparity -> metric-ish depth, linear in inverse depth between near and far.
+    const lo = percentile(disparity, 0.01);
+    const hi = percentile(disparity, 0.995);
+    const span = Math.max(1e-6, hi - lo);
+    const invNear = 1 / P.near, invFar = 1 / P.far;
+    for (let i = 0; i < N; i++) {
+      const dn = Math.min(1, Math.max(0, (disparity[i] - lo) / span));
+      z[i] = 1 / (invFar + dn * (invNear - invFar));
+      L[i] = Math.log(z[i]);
+    }
   }
   const skyZ = P.far * 0.9;
 
@@ -327,8 +335,9 @@ export function buildScene(input, opts = {}) {
   };
 
   // --- photo layer -------------------------------------------------------
-  const photo = new Layer(N);
-  for (let v = 0; v < H; v++) {
+  // the photo particles are only for the particle surface; a video's static world skips them
+  const photo = new Layer(P.photo === false ? 8 : N);
+  for (let v = 0; v < H && P.photo !== false; v++) {
     for (let u = 0; u < W; u++) {
       const i = v * W + u;
       let d = snapZ[i];
