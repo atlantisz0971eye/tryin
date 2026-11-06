@@ -591,6 +591,7 @@ const card = $('card');
 const desk = card.parentElement;
 const front = card.querySelector('.front'), back = card.querySelector('.back');
 let flipped = false;
+let faceSwapTimer = 0;
 back.inert = true;
 
 function setFlipped(on) {
@@ -606,6 +607,11 @@ function setFlipped(on) {
   back.inert = !on;
   front.setAttribute('aria-hidden', String(on));
   back.setAttribute('aria-hidden', String(!on));
+  // WebKit (iPhone Safari) ignores backface-visibility on children with their own layers, so the
+  // labels of the far face show through. Swap which face is visible when the turn passes 90°
+  // (about 45% of the way through, with this easing).
+  clearTimeout(faceSwapTimer);
+  faceSwapTimer = setTimeout(() => card.classList.toggle('show-back', flipped), 510);
   // the scene keeps running underneath; it just is not drawn while the back is up
   setTimeout(() => desk.classList.remove('turning'), 1150);
   if (on) setTimeout(() => { viewer.paused = flipped; }, 1150);
