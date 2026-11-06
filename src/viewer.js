@@ -8,6 +8,7 @@ attribute vec3 aOffR;
 attribute vec3 aOffD;
 uniform vec2 uViewport;
 uniform float uPxScale;
+uniform float uMaxPx;
 uniform float uSizeMul;
 uniform float uReveal;
 uniform float uTime;
@@ -39,7 +40,7 @@ void main() {
   ps *= smoothstep(h * 0.6, h * 0.6 + 0.4, uReveal);
   vAlpha = aAlpha * (1.0 - uShimmer * 0.45 * (0.5 + 0.5 * sin(uTime * 0.6 + h * 40.0)));
   if (ps < 1.0) { vAlpha *= ps; ps = 1.0; }
-  gl_PointSize = d < 0.03 ? 0.0 : min(ps, 96.0);
+  gl_PointSize = d < 0.03 ? 0.0 : min(ps, uMaxPx);
   vColor = aColor;
   if (uIsPhoto > 0.5 && uBleach > 0.0) {
     // flash bleach: the further from the moment's viewpoint, the more the world is burnt pale,
@@ -73,6 +74,136 @@ void main() {
 }
 `;
 
+// Video mode: every particle is one pixel ray. Its depth and colour come from a stack of frames,
+// and which frame it shows is decided by where the viewer stands relative to it.
+const TIME_VERT = /* glsl */ `
+precision highp sampler2DArray;
+uniform sampler2DArray uDepth;
+uniform sampler2DArray uColor;
+uniform sampler2D uPlateDepth;
+uniform sampler2D uPlateColor;
+uniform vec2 uGrid;
+uniform float uFocal;
+uniform float uFrames;
+uniform float uAnchor;
+uniform float uC;
+uniform float uFps;
+uniform float uJump;
+uniform float uIsPlate;
+uniform float uGhost;
+uniform int uMode;
+uniform vec2 uViewport;
+uniform float uPxScale;
+uniform float uMaxPx;
+uniform float uSizeMul;
+uniform float uReveal;
+uniform float uBleach;
+varying vec3 vColor;
+varying float vAlpha;
+
+vec3 rayOf(vec2 p) {
+  return vec3((p.x + 0.5 - uGrid.x * 0.5) / uFocal, -(p.y + 0.5 - uGrid.y * 0.5) / uFocal, -1.0);
+}
+
+ivec2 clampPix(ivec2 p) {
+  return clamp(p, ivec2(0), ivec2(uGrid) - 1);
+}
+
+// between two frames, particles drift from one moment to the next
+float ease(float t) { return smoothstep(0.15, 0.85, t); }
+
+float depthAt(ivec2 p, float f) {
+  float fl = floor(f);
+  int i0 = int(fl);
+  int i1 = min(i0 + 1, int(uFrames) - 1);
+  return mix(texelFetch(uDepth, ivec3(p, i0), 0).r, texelFetch(uDepth, ivec3(p, i1), 0).r, ease(f - fl));
+}
+
+vec3 colorAt(ivec2 p, float f) {
+  float fl = floor(f);
+  int i0 = int(fl);
+  int i1 = min(i0 + 1, int(uFrames) - 1);
+  return mix(texelFetch(uColor, ivec3(p, i0), 0).rgb, texelFetch(uColor, ivec3(p, i1), 0).rgb, ease(f - fl));
+}
+
+// mode 0: at the original viewpoint everything is the anchor moment; stepping towards a particle
+//         carries it into its future, stepping away sends it into its past
+// mode 1: slow light - the farther a particle is from you, the older the moment you see
+float frameFor(ivec2 p, vec3 r) {
+  float fmax = uFrames - 1.0;
+  float f = clamp(uAnchor, 0.0, fmax);
+  for (int k = 0; k < 2; k++) {
+    vec3 wp = r * depthAt(p, f);
+    float dc = distance(cameraPosition, wp);
+    float sec = uMode == 0 ? (length(wp) - dc) / uC : -dc / uC;
+    f = clamp((uMode == 0 ? uAnchor : fmax) + sec * uFps, 0.0, fmax);
+  }
+  return f;
+}
+
+float gapPx(vec3 npos, vec2 ndc) {
+  vec4 c = projectionMatrix * (modelViewMatrix * vec4(npos, 1.0));
+  if (c.w <= 0.0) return 0.0;
+  return length((c.xy / c.w - ndc) * uViewport * 0.5);
+}
+
+void main() {
+  vec2 pix = position.xy;
+  ivec2 p = ivec2(pix);
+  vec3 r = rayOf(pix);
+  float f = frameFor(p, r);
+  float z = depthAt(p, f);
+  ivec2 pr = clampPix(p + ivec2(1, 0));
+  ivec2 pd = clampPix(p + ivec2(0, 1));
+  float zr, zd;
+  vec3 col;
+  bool visible = true;
+
+  if (uIsPlate > 0.5) {
+    // another moment, shown only where the current one is blocked by something in front
+    float zp = texelFetch(uPlateDepth, p, 0).r;
+    visible = log(zp) - log(z) > uJump;
+    vec4 pc = texelFetch(uPlateColor, p, 0);
+    float dt = abs(pc.a * 255.0 - f) / max(uFrames - 1.0, 1.0);
+    float lum = dot(pc.rgb, vec3(0.299, 0.587, 0.114));
+    col = mix(pc.rgb, vec3(lum) * vec3(0.8, 0.9, 1.06), uGhost * (0.35 + 0.65 * clamp(dt * 2.0, 0.0, 1.0)));
+    z = zp;
+    zr = texelFetch(uPlateDepth, pr, 0).r;
+    zd = texelFetch(uPlateDepth, pd, 0).r;
+  } else {
+    col = colorAt(p, f);
+    zr = depthAt(pr, f);
+    zd = depthAt(pd, f);
+    if (uBleach > 0.0) {
+      float amt = uBleach * smoothstep(0.2, 3.0, length(cameraPosition));
+      float lum = dot(col, vec3(0.299, 0.587, 0.114));
+      col = mix(col, mix(vec3(lum), vec3(0.93, 0.91, 0.86), 0.3 + 0.5 * lum), amt);
+    }
+  }
+
+  vec3 pos = r * z;
+  vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  gl_Position = projectionMatrix * mv;
+  float d = -mv.z;
+  float base = z / uFocal * uSizeMul * uPxScale / max(d, 0.001);
+  vec2 ndc = gl_Position.xy / gl_Position.w;
+  float gap = 0.0;
+  if (abs(log(zr / z)) < uJump) gap = max(gap, gapPx(rayOf(vec2(pr)) * zr, ndc));
+  if (abs(log(zd / z)) < uJump) gap = max(gap, gapPx(rayOf(vec2(pd)) * zd, ndc));
+  float ps = max(base, min(gap * 1.15, base * 4.0));
+  float h = fract(sin(dot(pix, vec2(12.9898, 78.233))) * 43758.5453);
+  ps *= smoothstep(h * 0.6, h * 0.6 + 0.4, uReveal);
+  vAlpha = 1.0;
+  vColor = col;
+  if (!visible || d < 0.03) {
+    gl_PointSize = 0.0;
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  } else {
+    gl_PointSize = min(max(ps, 1.0), uMaxPx);
+  }
+}
+`;
+
 export class Viewer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -92,9 +223,30 @@ export class Viewer {
       uShimmer: { value: 1 },
       uBleach: { value: 0 },
       uViewport: { value: new THREE.Vector2(1, 1) },
+      // up close, points stop growing and the surface dissolves into particles
+      uMaxPx: { value: 28 },
     };
     this.layers = {};
+    this.textures = [];
     this.revealStart = 0;
+    this.timeUniforms = {
+      uDepth: { value: null },
+      uColor: { value: null },
+      uPlateDepth: { value: null },
+      uPlateColor: { value: null },
+      uGrid: { value: new THREE.Vector2(1, 1) },
+      uFocal: { value: 1 },
+      uFrames: { value: 1 },
+      uAnchor: { value: 0 },
+      uC: { value: 1.5 },
+      uFps: { value: 8 },
+      uJump: { value: 0.12 },
+      uGhost: { value: 0.6 },
+      uMode: { value: 0 },
+    };
+    this.timeFlow = false;
+    this.flowDir = 1;
+    this.onTime = null;
 
     this.pos = new THREE.Vector3();
     this.yaw = 0;
@@ -110,11 +262,19 @@ export class Viewer {
     this.renderer.setAnimationLoop(() => this._frame());
   }
 
-  setScene(built) {
+  _clear() {
     for (const obj of Object.values(this.layers)) {
       this.scene.remove(obj);
       obj.geometry.dispose();
+      obj.material.dispose();
     }
+    for (const t of this.textures) t.dispose();
+    this.layers = {};
+    this.textures = [];
+  }
+
+  setScene(built) {
+    this._clear();
     this.layers = {
       photo: this._makePoints(built.photo, FRAG_SOLID, false, true),
       shadow: this._makePoints(built.shadow, FRAG_SOLID, false),
@@ -124,6 +284,69 @@ export class Viewer {
     this.camera.fov = built.meta.vfov;
     this._resize();
     this.revealStart = this.timer.getElapsed();
+  }
+
+  setTimeField(tf) {
+    this._clear();
+    const { width: W, height: H, frames: F } = tf;
+    const depthTex = new THREE.DataArrayTexture(tf.depth, W, H, F);
+    depthTex.format = THREE.RedFormat;
+    depthTex.type = THREE.FloatType;
+    const colorTex = new THREE.DataArrayTexture(tf.color, W, H, F);
+    colorTex.format = THREE.RGBAFormat;
+    const plateDepthTex = new THREE.DataTexture(tf.plateDepth, W, H, THREE.RedFormat, THREE.FloatType);
+    const plateColorTex = new THREE.DataTexture(tf.plateColor, W, H, THREE.RGBAFormat);
+    for (const t of [depthTex, colorTex, plateDepthTex, plateColorTex]) {
+      t.minFilter = THREE.NearestFilter;
+      t.magFilter = THREE.NearestFilter;
+      t.generateMipmaps = false;
+      t.unpackAlignment = 1;
+      t.needsUpdate = true;
+    }
+    this.textures = [depthTex, colorTex, plateDepthTex, plateColorTex];
+
+    const u = this.timeUniforms;
+    u.uDepth.value = depthTex;
+    u.uColor.value = colorTex;
+    u.uPlateDepth.value = plateDepthTex;
+    u.uPlateColor.value = plateColorTex;
+    u.uGrid.value.set(W, H);
+    u.uFocal.value = tf.focal;
+    u.uFrames.value = F;
+    u.uFps.value = tf.fps;
+    u.uJump.value = tf.jump;
+    if (u.uAnchor.value > F - 1) u.uAnchor.value = (F - 1) / 2;
+
+    const grid = new Float32Array(W * H * 3);
+    for (let y = 0, i = 0; y < H; y++) {
+      for (let x = 0; x < W; x++, i++) { grid[i * 3] = x; grid[i * 3 + 1] = y; }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(grid, 3));
+    const make = (isPlate) => {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { ...this.uniforms, ...u, uIsPlate: { value: isPlate ? 1 : 0 } },
+        vertexShader: TIME_VERT,
+        fragmentShader: FRAG_SOLID,
+      });
+      const pts = new THREE.Points(geo, mat);
+      pts.frustumCulled = false;
+      return pts;
+    };
+    this.layers = { frames: make(false), plate: make(true) };
+    for (const obj of Object.values(this.layers)) this.scene.add(obj);
+    this.camera.fov = tf.vfov;
+    this._resize();
+    this.revealStart = this.timer.getElapsed();
+  }
+
+  setTime({ anchor, c, mode, ghost, flow } = {}) {
+    const u = this.timeUniforms;
+    if (anchor !== undefined) u.uAnchor.value = anchor;
+    if (c !== undefined) u.uC.value = c;
+    if (mode !== undefined) u.uMode.value = mode;
+    if (ghost !== undefined) u.uGhost.value = ghost;
+    if (flow !== undefined) this.timeFlow = flow;
   }
 
   _makePoints(layer, frag, transparent, isPhoto = false) {
@@ -168,6 +391,7 @@ export class Viewer {
     this.camera.updateProjectionMatrix();
     const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.uniforms.uViewport.value.copy(buf);
+    this.uniforms.uMaxPx.value = 28 * this.renderer.getPixelRatio();
     this.uniforms.uPxScale.value = (this.camera.projectionMatrix.elements[5] * buf.y) / 2;
   }
 
@@ -261,6 +485,17 @@ export class Viewer {
       this.yaw = r.yaw * (1 - e);
       this.pitch = r.pitch * (1 - e);
       if (r.t >= 1) this.returning = null;
+    }
+
+    if (this.timeFlow && this.layers.frames) {
+      // let the anchor moment drift back and forth through the clip
+      const u = this.timeUniforms;
+      const fmax = u.uFrames.value - 1;
+      let a = u.uAnchor.value + this.flowDir * dt * u.uFps.value * 0.5;
+      if (a > fmax) { a = fmax; this.flowDir = -1; }
+      if (a < 0) { a = 0; this.flowDir = 1; }
+      u.uAnchor.value = a;
+      if (this.onTime) this.onTime(a);
     }
 
     this.camera.position.copy(this.pos);
