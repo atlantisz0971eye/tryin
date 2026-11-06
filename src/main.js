@@ -3,7 +3,8 @@ import { buildScene, DEFAULTS } from './build.js';
 import { buildTimeField, TIME_DEFAULTS } from './timefield.js';
 import { extractFrames } from './video.js';
 import { Observer } from './observer.js';
-import { TimeModel, PRESETS, DRIVERS } from './timemodel.js';
+import { TimeModel, PRESETS, DRIVERS, END_MODES } from './timemodel.js';
+import { blurThumb } from './glow.js';
 import { drawDiagram } from './diagram.js';
 
 const $ = (id) => document.getElementById(id);
@@ -34,6 +35,9 @@ const state = {
   // shared
   sizeMul: 1.4,
   bleach: 0,
+  immersive: true,
+  bgStrength: 1,
+  softness: 1,
   device: '',
   stats: null,
   loadToken: 0,
@@ -115,6 +119,21 @@ function renderPanel() {
     state.bleach = v;
     viewer.setBleach(v);
   }));
+  panel.appendChild(sliderRow({ label: '近处柔焦', min: 0, max: 1, step: 0.05, unit: '' }, state.softness, (v) => {
+    state.softness = v;
+    viewer.setSoftness(v);
+  }));
+  panel.appendChild(sliderRow({ label: '背景亮度', min: 0, max: 1.6, step: 0.05, unit: '' }, state.bgStrength, (v) => {
+    state.bgStrength = v;
+    viewer.setBackgroundStrength(v);
+  }));
+  const imm = document.createElement('div');
+  imm.className = 'checks';
+  imm.appendChild(checkbox('沉浸背景（边缘渐隐）', state.immersive, (on) => {
+    state.immersive = on;
+    viewer.setImmersive(on);
+  }));
+  panel.appendChild(imm);
 
   const res = document.createElement('div');
   res.className = 'row';
@@ -198,6 +217,7 @@ function renderVideoControls() {
   const presetLabels = Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, p.label]));
   panel.appendChild(selectRow('时间预设', presetLabels, model.preset, (v) => model.setPreset(v)));
   panel.appendChild(selectRow('此刻怎么前进', DRIVERS, model.driver, (v) => { model.driver = v; }));
+  panel.appendChild(selectRow('走到尽头', END_MODES, model.endMode, (v) => { model.endMode = v; }));
 
   panel.appendChild(sliderRow({ label: '世界光速', min: 0.5, max: 10, step: 0.1, unit: ' m/s' }, model.c, (v) => {
     model.c = v;
@@ -244,7 +264,9 @@ viewer.onTick = (dt, pos) => {
   const p = [pos.x, pos.y, pos.z];
   observer.update(p, dt, viewer.isReturning);
   model.update(observer, dt);
-  viewer.setTime(model.uniforms());
+  const u = model.uniforms();
+  viewer.setTime(u);
+  viewer.setBackgroundFrame(u.anchor);
 
   const last = trail[trail.length - 1];
   if (!last || Math.abs(last[0] - p[0]) > 0.02 || Math.abs(last[1] - model.t0) > 0.01) {
@@ -457,6 +479,8 @@ function rebuild() {
       const tf = buildTimeField(state.clip, state.timeParams);
       const buildMs = performance.now() - t0;
       viewer.setTimeField(tf);
+      const thumbs = state.clip.frames.map((f) => blurThumb(f, tf.width, tf.height));
+      viewer.setBackground(thumbs.map((t) => t.data), thumbs[0].width, thumbs[0].height);
       for (const [k, on] of Object.entries(state.videoLayers)) viewer.setLayerVisible(k, on);
       state.stats = {
         kind: 'video', frames: tf.frames, duration: state.clip.duration,
@@ -466,6 +490,8 @@ function rebuild() {
       const built = buildScene(state.depth, state.params);
       const buildMs = performance.now() - t0;
       viewer.setScene(built);
+      const thumb = blurThumb(state.depth.rgba, state.depth.width, state.depth.height);
+      viewer.setBackground([thumb.data], thumb.width, thumb.height);
       for (const [k, on] of Object.entries(state.layers)) viewer.setLayerVisible(k, on);
       state.stats = {
         kind: 'photo', photo: built.photo.count, shadow: built.shadow.count, ash: built.ash.count,
