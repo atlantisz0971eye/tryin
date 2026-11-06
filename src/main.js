@@ -2,6 +2,9 @@ import { Viewer } from './viewer.js';
 import { buildScene, DEFAULTS } from './build.js';
 import { buildTimeField, TIME_DEFAULTS } from './timefield.js';
 import { extractFrames } from './video.js';
+import { Observer } from './observer.js';
+import { TimeModel, PRESETS, DRIVERS } from './timemodel.js';
+import { drawDiagram } from './diagram.js';
 
 const $ = (id) => document.getElementById(id);
 const intro = $('intro'), busy = $('busy'), hud = $('hud'), panel = $('panel');
@@ -9,6 +12,8 @@ const busyText = $('busy-text'), busyBar = $('busy-bar');
 
 const viewer = new Viewer($('stage'));
 const worker = new Worker(new URL('./depth-worker.js', import.meta.url), { type: 'module' });
+const observer = new Observer();
+const model = new TimeModel();
 
 const state = {
   mode: 'photo',      // 'photo' | 'video'
@@ -24,7 +29,7 @@ const state = {
   videoResolution: 480,
   clip: null,         // { width, height, frames, disparities, fps, duration }
   timeParams: { ...TIME_DEFAULTS },
-  time: { anchor: 0, c: 1.5, mode: 0, ghost: 0.6, flow: false },
+  time: { ghost: 0.6, tint: 0.6, diagram: true },
   videoLayers: { frames: true, plate: true },
   // shared
   sizeMul: 1.4,
@@ -171,63 +176,91 @@ function renderPanel() {
 
 let anchorInput = null, anchorOut = null;
 
+function selectRow(label, options, current, onChange) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<label><span>${label}</span></label>`;
+  const sel = document.createElement('select');
+  for (const [value, text] of Object.entries(options)) {
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = text;
+    if (value === current) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.onchange = () => onChange(sel.value);
+  row.appendChild(sel);
+  return row;
+}
+
 function renderVideoControls() {
   const t = state.time;
-  const clip = state.clip;
-  const fmax = clip ? clip.frames.length - 1 : 1;
+  const presetLabels = Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, p.label]));
+  panel.appendChild(selectRow('时间预设', presetLabels, model.preset, (v) => model.setPreset(v)));
+  panel.appendChild(selectRow('此刻怎么前进', DRIVERS, model.driver, (v) => { model.driver = v; }));
 
-  const modeRow = document.createElement('div');
-  modeRow.className = 'row';
-  modeRow.innerHTML = '<label><span>时间模式</span></label>';
-  const modeSel = document.createElement('select');
-  for (const [v, label] of [[0, '以拍摄点为此刻：走近 = 未来，走远 = 过去'], [1, '光速很慢：越远越是过去']]) {
-    const o = document.createElement('option');
-    o.value = v;
-    o.textContent = label;
-    if (v === t.mode) o.selected = true;
-    modeSel.appendChild(o);
-  }
-  modeSel.onchange = () => {
-    t.mode = Number(modeSel.value);
-    viewer.setTime({ mode: t.mode });
-  };
-  modeRow.appendChild(modeSel);
-  panel.appendChild(modeRow);
-
-  panel.appendChild(sliderRow({ label: '光速', min: 0.2, max: 10, step: 0.1, unit: ' m/s' }, t.c, (v) => {
-    t.c = v;
-    viewer.setTime({ c: v });
+  panel.appendChild(sliderRow({ label: '世界光速', min: 0.5, max: 10, step: 0.1, unit: ' m/s' }, model.c, (v) => {
+    model.c = v;
+  }));
+  panel.appendChild(sliderRow({ label: '每走 1 米，此刻前进', min: 0.1, max: 4, step: 0.1, unit: ' s' }, model.secondsPerMeter, (v) => {
+    model.secondsPerMeter = v;
   }));
 
-  const toSec = (f) => (clip ? (f + 0.5) / clip.fps : 0);
-  const row = sliderRow({ label: '此刻', min: 0, max: fmax, step: 0.01, unit: '', format: (v) => `${toSec(v).toFixed(2)} s` }, t.anchor, (v) => {
-    t.anchor = v;
-    viewer.setTime({ anchor: v });
+  const dur = state.clip ? state.clip.duration : 1;
+  const row = sliderRow({ label: '此刻', min: 0, max: dur, step: 0.01, unit: ' s' }, model.t0, (v) => {
+    model.t0 = v;
   });
   anchorInput = row.querySelector('input');
   anchorOut = row.querySelector('output');
   panel.appendChild(row);
 
+  panel.appendChild(sliderRow({ label: '时差色调', min: 0, max: 1, step: 0.05, unit: '' }, t.tint, (v) => {
+    t.tint = v;
+    viewer.setTime({ tint: v });
+  }));
   panel.appendChild(sliderRow({ label: '异时色调', min: 0, max: 1, step: 0.05, unit: '' }, t.ghost, (v) => {
     t.ghost = v;
     viewer.setTime({ ghost: v });
   }));
 
-  const flow = document.createElement('div');
-  flow.className = 'checks';
-  flow.appendChild(checkbox('让此刻流动', t.flow, (on) => {
-    t.flow = on;
-    viewer.setTime({ flow: on });
+  const checks = document.createElement('div');
+  checks.className = 'checks';
+  checks.appendChild(checkbox('时空图', t.diagram, (on) => {
+    t.diagram = on;
+    diagramEl.classList.toggle('hidden', !on || state.mode !== 'video');
   }));
-  panel.appendChild(flow);
+  panel.appendChild(checks);
 }
 
-viewer.onTime = (a) => {
-  state.time.anchor = a;
-  if (anchorInput && !panel.classList.contains('hidden')) {
-    anchorInput.value = a;
-    if (state.clip) anchorOut.textContent = `${((a + 0.5) / state.clip.fps).toFixed(2)} s`;
+// ---------------------------------------------------------------- time, every frame
+
+const diagramEl = $('diagram');
+const tstatEl = $('tstat');
+const trail = [];
+let hudClock = 0;
+
+viewer.onTick = (dt, pos) => {
+  if (state.mode !== 'video' || !state.clip) return;
+  const p = [pos.x, pos.y, pos.z];
+  observer.update(p, dt, viewer.isReturning);
+  model.update(observer, dt);
+  viewer.setTime(model.uniforms());
+
+  const last = trail[trail.length - 1];
+  if (!last || Math.abs(last[0] - p[0]) > 0.02 || Math.abs(last[1] - model.t0) > 0.01) {
+    trail.push([p[0], model.t0]);
+    if (trail.length > 600) trail.shift();
   }
+
+  hudClock += dt;
+  if (hudClock < 0.1) return;
+  hudClock = 0;
+  tstatEl.textContent = `v ${observer.speed.toFixed(2)} m/s · β ${model.beta.toFixed(2)} · 此刻 ${model.t0.toFixed(1)} / ${model.duration.toFixed(1)} s`;
+  if (anchorInput && !panel.classList.contains('hidden') && document.activeElement !== anchorInput) {
+    anchorInput.value = model.t0;
+    anchorOut.textContent = `${model.t0.toFixed(2)} s`;
+  }
+  if (state.time.diagram) drawDiagram(diagramEl, model, p, trail);
 };
 
 function sliderRow(s, value, onInput) {
@@ -301,6 +334,9 @@ function showScene() {
   busy.classList.add('hidden');
   hud.classList.remove('hidden');
   $('hint').textContent = hintText();
+  const video = state.mode === 'video';
+  tstatEl.classList.toggle('hidden', !video);
+  diagramEl.classList.toggle('hidden', !video || !state.time.diagram);
 }
 
 function hintText() {
@@ -308,7 +344,7 @@ function hintText() {
   const move = touch
     ? '单指拖动看四周 · 双指张合前进后退 · 双指平移侧移'
     : '拖动看四周 · WASD / 滚轮 移动 · Q E 升降';
-  return state.mode === 'video' ? `${move} · 你走动，时间就跟着走` : move;
+  return state.mode === 'video' ? `${move} · 动起来，此刻就会倾斜；走得越多，时间走得越远` : move;
 }
 
 const isVideo = (blob, name = '') => blob.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|ogv)$/i.test(name);
@@ -393,8 +429,10 @@ async function processVideo() {
     }
     state.clip = { ...clip, disparities };
     state.depthMs = performance.now() - t0;
-    state.time.anchor = Math.round((clip.frames.length - 1) / 2);
-    viewer.setTime({ ...state.time });
+    model.configure(clip.duration, clip.fps);
+    observer.reset();
+    trail.length = 0;
+    viewer.setTime({ ghost: state.time.ghost, tint: state.time.tint });
     renderPanel();
     rebuild();
   } catch (err) {
@@ -464,7 +502,11 @@ window.addEventListener('paste', (e) => {
 });
 
 $('btn-new').onclick = () => fileInput.click();
-$('btn-home').onclick = () => viewer.resetView();
+$('btn-home').onclick = () => {
+  viewer.resetView();
+  model.reset(observer.walked);
+  trail.length = 0;
+};
 $('btn-panel').onclick = () => {
   const open = panel.classList.toggle('hidden') === false;
   $('btn-panel').setAttribute('aria-expanded', String(open));
@@ -487,4 +529,4 @@ const src = new URLSearchParams(location.search).get('src');
 if (src) loadMedia(src);
 
 // exposed for tinkering from the devtools console
-window.atom = { viewer, state, rebuild };
+window.atom = { viewer, state, rebuild, model, observer };

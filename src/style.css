@@ -116,7 +116,19 @@ h1 {
   letter-spacing: 0.05em;
   text-shadow: 0 0 6px #000;
 }
-#dist { color: var(--fg); }
+#dist, #tstat { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+#diagram {
+  position: absolute;
+  right: 12px;
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 28px);
+  width: 160px;
+  height: 160px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  backdrop-filter: blur(6px);
+}
 
 #panel {
   pointer-events: auto;
