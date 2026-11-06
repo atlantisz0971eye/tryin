@@ -23,6 +23,27 @@ uniform float uSoftHi;
 uniform float uFeather;
 uniform float uPassScale;
 varying float vSoft;
+varying float vEdge;
+varying float vWeight;
+
+// Vision Pro style border: inside a band along the picture's edge, points grow, soften and fade,
+// so the picture itself dissolves into the blurred backdrop rather than ending in a hard line.
+float edgeT(vec2 pix) {
+  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
+  return uFeather > 0.0 ? smoothstep(0.0, 1.0, clamp(edge, 0.0, 1.0)) : 1.0;
+}
+
+void edgeBlend(vec2 pix, inout float ps, float sizeSoft) {
+  float t = edgeT(pix);
+  float e = 1.0 - t;
+  float grow = 1.0 + 4.0 * e * e;
+  // inside the band: halo only, with blur set by the growth and opacity by the distance to the edge
+  vSoft = t < 0.98 ? 1.0 : sizeSoft;
+  vEdge = t;
+  // bigger blobs overlap more, so divide by their area to keep coverage ~ t
+  vWeight = pow(t, 1.3) / (grow * grow);
+  ps *= (1.0 + 0.7 * sizeSoft) * grow;
+}
 varying vec3 vColor;
 varying float vAlpha;
 
@@ -50,13 +71,23 @@ void main() {
   if (ps < 1.0) { vAlpha *= ps; ps = 1.0; }
   // once a point is blown up on screen it turns into a soft blob: up close the cloud reads as
   // out-of-focus light instead of hard coins
-  vSoft = uSoft * smoothstep(uSoftLo, uSoftHi, ps);
-  ps *= 1.0 + 0.7 * vSoft;
-  // feather the borders of the picture into the surrounding glow
   vec2 pix = position.xy / max(-position.z, 1e-4) * uFocal * vec2(1.0, -1.0) + uGrid * 0.5;
-  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
-  bool keep = uFeather <= 0.0 || fract(h * 91.7) < smoothstep(0.0, 1.0, edge);
-  gl_PointSize = (d < 0.03 || !keep) ? 0.0 : min(ps, uMaxPx) * uPassScale;
+  float sizeSoft = uSoft * smoothstep(uSoftLo, uSoftHi, ps);
+  bool hide = false;
+  if (uIsPhoto > 0.5) {
+    edgeBlend(pix, ps, sizeSoft);
+  } else {
+    // only the picture itself melts into the backdrop (shadow and ash halos would smear dark
+    // across it); these layers just thin out towards the border
+    float t = edgeT(pix);
+    hide = fract(h * 91.7) > pow(t, 6.0);
+    vAlpha *= t;
+    vSoft = sizeSoft;
+    vEdge = 1.0;
+    vWeight = 1.0;
+    ps *= 1.0 + 0.7 * sizeSoft;
+  }
+  gl_PointSize = (d < 0.03 || hide) ? 0.0 : min(ps, uMaxPx * (1.0 + 3.0 * (1.0 - vEdge))) * uPassScale;
   vColor = aColor;
   if (uIsPhoto > 0.5 && uBleach > 0.0) {
     // flash bleach: the further from the moment's viewpoint, the more the world is burnt pale,
@@ -73,8 +104,11 @@ const FRAG_SOLID = /* glsl */ `
 varying vec3 vColor;
 varying float vAlpha;
 varying float vSoft;
+varying float vEdge;
 void main() {
   vec2 c = gl_PointCoord * 2.0 - 1.0;
+  // inside the border band everything is drawn as halo only
+  if (vEdge < 0.98) discard;
   // soft points keep only a small opaque core; the halo is drawn by FRAG_HALO
   if (dot(c, c) > mix(1.0, 0.06, vSoft)) discard;
   gl_FragColor = vec4(vColor, 1.0);
@@ -85,12 +119,13 @@ const FRAG_HALO = /* glsl */ `
 varying vec3 vColor;
 varying float vAlpha;
 varying float vSoft;
+varying float vWeight;
 void main() {
-  if (vSoft < 0.01) discard;
+  if (vSoft < 0.01 || vWeight < 0.001) discard;
   vec2 c = gl_PointCoord * 2.0 - 1.0;
   float r2 = dot(c, c);
   if (r2 > 1.0) discard;
-  float a = vSoft * exp(-r2 * 2.2);
+  float a = vSoft * vWeight * exp(-r2 * 2.2);
   gl_FragColor = vec4(vColor * a, a);
 }
 `;
@@ -150,7 +185,7 @@ void main() {
   // blend in a sample pulled towards the centre so stretched edges smear into a wide glow
   vec3 col = mix(sampleBg(cuv), sampleBg(mix(cuv, vec2(0.5), 0.35)), clamp(outside, 0.0, 0.6));
   float behind = smoothstep(-0.1, 0.5, d.z);
-  float glow = mix(0.62, 0.12, 1.0 - exp(-outside * 1.4)) * (1.0 - 0.75 * behind);
+  float glow = mix(0.88, 0.14, 1.0 - exp(-outside * 1.1)) * (1.0 - 0.75 * behind);
   gl_FragColor = vec4(col * glow * uBgStrength, 1.0);
 }
 `;
@@ -199,6 +234,27 @@ uniform float uSoftHi;
 uniform float uFeather;
 uniform float uPassScale;
 varying float vSoft;
+varying float vEdge;
+varying float vWeight;
+
+// Vision Pro style border: inside a band along the picture's edge, points grow, soften and fade,
+// so the picture itself dissolves into the blurred backdrop rather than ending in a hard line.
+float edgeT(vec2 pix) {
+  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
+  return uFeather > 0.0 ? smoothstep(0.0, 1.0, clamp(edge, 0.0, 1.0)) : 1.0;
+}
+
+void edgeBlend(vec2 pix, inout float ps, float sizeSoft) {
+  float t = edgeT(pix);
+  float e = 1.0 - t;
+  float grow = 1.0 + 4.0 * e * e;
+  // inside the band: halo only, with blur set by the growth and opacity by the distance to the edge
+  vSoft = t < 0.98 ? 1.0 : sizeSoft;
+  vEdge = t;
+  // bigger blobs overlap more, so divide by their area to keep coverage ~ t
+  vWeight = pow(t, 1.3) / (grow * grow);
+  ps *= (1.0 + 0.7 * sizeSoft) * grow;
+}
 varying vec3 vColor;
 varying float vAlpha;
 
@@ -305,15 +361,13 @@ void main() {
   ps *= smoothstep(h * 0.6, h * 0.6 + 0.4, uReveal);
   vAlpha = 1.0;
   vColor = col;
-  vSoft = uSoft * smoothstep(uSoftLo, uSoftHi, ps);
-  ps *= 1.0 + 0.7 * vSoft;
-  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
-  if (uFeather > 0.0 && fract(h * 91.7) > smoothstep(0.0, 1.0, edge)) visible = false;
+  edgeBlend(pix, ps, uSoft * smoothstep(uSoftLo, uSoftHi, ps));
+  if (uIsPlate > 0.5 && vEdge < 0.98) visible = false;
   if (!visible || d < 0.03) {
     gl_PointSize = 0.0;
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
   } else {
-    gl_PointSize = min(max(ps, 1.0), uMaxPx) * uPassScale;
+    gl_PointSize = min(max(ps, 1.0), uMaxPx * (1.0 + 3.0 * (1.0 - vEdge))) * uPassScale;
   }
 }
 `;
@@ -363,12 +417,12 @@ export class Viewer {
       uSoft: { value: 1 },
       uSoftLo: { value: 5 },
       uSoftHi: { value: 18 },
-      uFeather: { value: 0.06 },
+      uFeather: { value: 0.15 },
       uPassScale: { value: 1 },
       uGrid: { value: new THREE.Vector2(1, 1) },
       uFocal: { value: 1 },
     };
-    this.feather = 0.06;
+    this.feather = 0.15;
     this.halos = {};
     this.bgUniforms = {
       uBg: { value: null },
@@ -609,6 +663,10 @@ export class Viewer {
   setBackgroundStrength(v) { this.bgUniforms.uBgStrength.value = v; }
   setBackgroundFrame(f) { this.bgUniforms.uBgFrame.value = Math.max(0, Math.min(this.bgUniforms.uBgFrames.value - 1, f)); }
   setSoftness(v) { this.uniforms.uSoft.value = v; }
+  setFeather(v) {
+    this.feather = v;
+    if (this.immersive !== false) this.uniforms.uFeather.value = v;
+  }
 
   setSizeMul(v) { this.uniforms.uSizeMul.value = v; }
   setShimmer(on) { this.uniforms.uShimmer.value = on ? 1 : 0; }
@@ -743,11 +801,12 @@ export class Viewer {
     r.setRenderTarget(this.accum);
     r.setClearColor(0x000000, 0);
     r.clear();
-    if (this.uniforms.uSoft.value > 0) r.render(this.haloScene, this.camera);
+    const halos = this.uniforms.uSoft.value > 0 || this.uniforms.uFeather.value > 0;
+    if (halos) r.render(this.haloScene, this.camera);
     r.setRenderTarget(null);
     r.setClearColor(0x000000, 1);
     r.clear();
     r.render(this.scene, this.camera);
-    if (this.uniforms.uSoft.value > 0) r.render(this.compScene, this.compCamera);
+    if (halos) r.render(this.compScene, this.compCamera);
   }
 }
