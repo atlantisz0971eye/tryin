@@ -1,6 +1,7 @@
 // Walking with the phone, identical on iPhone and Android, using only what both browsers offer:
 //   turning: the gyroscope (deviceorientation) sets where the camera looks — the phone is a window
-//   walking: footsteps from the accelerometer (devicemotion) carry you along where you face
+//   moving: the on-screen thumb stick (main.js). Counting real footsteps from the accelerometer
+//           (devicemotion) is still here as an experiment, off by default.
 // No camera is needed. When you start (or re-centre), the way you face becomes the way the
 // picture was taken.
 
@@ -29,6 +30,7 @@ export async function requestMotionPermission() {
 export class MotionWalker {
   constructor() {
     this.active = false;
+    this.countSteps = false;   // experimental: real footsteps also move you
     this.stepLength = 0.7;     // metres per real step
     this.scale = 1;            // scene metres per real metre ("walk scale")
     this.steps = new StepDetector();
@@ -53,7 +55,15 @@ export class MotionWalker {
     this.needsRecenter = true;
     this.pending = 0;
     window.addEventListener('deviceorientation', this._onOrientation);
-    window.addEventListener('devicemotion', this._onMotion);
+    if (this.countSteps) window.addEventListener('devicemotion', this._onMotion);
+  }
+
+  setCountSteps(on) {
+    this.countSteps = on;
+    this.pending = 0;
+    if (!this.active) return;
+    if (on) window.addEventListener('devicemotion', this._onMotion);
+    else window.removeEventListener('devicemotion', this._onMotion);
   }
 
   stop() {
