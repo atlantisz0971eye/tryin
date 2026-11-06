@@ -18,6 +18,7 @@ const state = {
   depth: null,      // { width, height, rgba, disparity }
   params: { ...DEFAULTS },
   sizeMul: 1.4,
+  bleach: 0,
   shimmer: true,
   layers: { photo: true, shadow: true, ash: true },
   jobId: 0,
@@ -34,6 +35,7 @@ const SLIDERS = [
   { key: 'jump', label: '断裂阈值', min: 0.04, max: 0.4, step: 0.01, unit: '' },
   { key: 'ash', label: '边缘灰烬', min: 0, max: 3, step: 0.1, unit: '' },
   { key: 'smoke', label: '影中烟尘', min: 0, max: 3, step: 0.1, unit: '' },
+  { key: 'shadowTone', label: '影子明度', min: 0, max: 0.2, step: 0.01, unit: '' },
 ];
 
 function renderPanel() {
@@ -45,6 +47,10 @@ function renderPanel() {
   panel.appendChild(sliderRow({ label: '粒子大小', min: 0.6, max: 3, step: 0.05, unit: '' }, state.sizeMul, (v) => {
     state.sizeMul = v;
     viewer.setSizeMul(v);
+  }));
+  panel.appendChild(sliderRow({ label: '闪光漂白', min: 0, max: 1, step: 0.05, unit: '' }, state.bleach, (v) => {
+    state.bleach = v;
+    viewer.setBleach(v);
   }));
 
   const res = document.createElement('div');
