@@ -81,14 +81,24 @@ void main() {
     // only the picture itself melts into the backdrop (shadow and ash halos would smear dark
     // across it); these layers just thin out towards the border
     float t = edgeT(pix);
-    hide = fract(h * 91.7) > smoothstep(0.85, 1.0, t);
+    hide = fract(h * 91.7) >= smoothstep(0.85, 1.0, t);   // >= so a zero random value is hidden too
+    // Seen from the capture point the photo has to be whole. The charred imprint and the ash hang
+    // in the gap behind the picture, so they only come out as you step off the original ray.
+    float par = length(cross(normalize(cameraPosition - position), normalize(-position)));
+    hide = hide || fract(h * 37.7) >= smoothstep(0.012, 0.1, par);
     vAlpha *= t;
     vSoft = sizeSoft;
     vEdge = 1.0;
     vWeight = 1.0;
     ps *= 1.0 + 0.7 * sizeSoft;
   }
-  gl_PointSize = (d < 0.03 || hide) ? 0.0 : min(ps, uMaxPx * (1.0 + 3.0 * (1.0 - vEdge))) * uPassScale;
+  if (d < 0.03 || hide) {
+    // clip it away instead of giving it size 0: on some GPUs a zero-size point still draws one pixel
+    gl_PointSize = 0.0;
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  } else {
+    gl_PointSize = min(ps, uMaxPx * (1.0 + 3.0 * (1.0 - vEdge))) * uPassScale;
+  }
   vColor = aColor;
   if (uIsPhoto > 0.5 && uBleach > 0.0) {
     // flash bleach: the further from the moment's viewpoint, the more the world is burnt pale,
@@ -378,15 +388,12 @@ void main() {
 // texture, so it stays sharp however coarse the depth grid is; geometry only decides where it sits.
 const MESH_VERT = /* glsl */ `
 attribute float aChar;
-attribute float aFace;
 varying vec2 vUv;
 varying float vChar;
-varying float vFace;
 varying vec3 vWorld;
 void main() {
   vUv = uv;
   vChar = aChar;
-  vFace = aFace;
   vWorld = position;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
@@ -402,7 +409,6 @@ uniform float uBleach;
 uniform float uStretch;
 varying vec2 vUv;
 varying float vChar;
-varying float vFace;
 varying vec3 vWorld;
 
 float hash21(vec2 p) {
@@ -416,16 +422,23 @@ void main() {
   float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
   float t = uFeather > 0.0 ? smoothstep(0.0, 1.0, clamp(edge, 0.0, 1.0)) : 1.0;
 
-  // torn silhouettes crumble: the closer to the torn edge, the more of it is gone
+  // torn silhouettes crumble: the closer to the torn edge, the more of it is gone. Only as you
+  // step away from the capture point; from there the photo is whole and its edges are clean.
   float h = hash21(floor(vUv * uGrid * 3.0));
-  if (vChar * 0.7 > 0.2 + 0.8 * h) discard;
+  float par = length(cross(normalize(cameraPosition - vWorld), normalize(-vWorld)));
+  float vp = smoothstep(0.012, 0.1, par);
+  if (vChar * 0.7 * vp > 0.2 + 0.8 * h) discard;
 
-  // Stretched picture: how squarely this patch faces you now, against how squarely it faced the
-  // camera. A big jump means a sliver of the photo smeared over a wide area; dissolve it into grain.
+  // Stretched picture: how squarely this triangle faces you now, against how squarely it faced the
+  // capture camera at the origin. Both use the same triangle, so at the capture point the ratio is
+  // exactly 1 whatever the depth noise. A big jump means a sliver of the photo smeared over a wide
+  // area; dissolve it into grain.
   vec3 nrm = cross(dFdx(vWorld), dFdy(vWorld));
   float nl = length(nrm);
-  float facingNow = nl > 1e-12 ? abs(dot(nrm / nl, normalize(cameraPosition - vWorld))) : 1.0;
-  float k = smoothstep(uStretch * 0.5, uStretch * 1.6, facingNow / (vFace + 0.03));
+  vec3 nn = nl > 1e-12 ? nrm / nl : vec3(0.0, 0.0, 1.0);
+  float facingNow = abs(dot(nn, normalize(cameraPosition - vWorld)));
+  float facingThen = abs(dot(nn, normalize(-vWorld)));
+  float k = smoothstep(uStretch * 0.5, uStretch * 1.6, facingNow / (facingThen + 0.03));
   if (k > h) discard;
 
   // the picture's border melts into the backdrop: blurrier and fainter towards the edge
@@ -436,7 +449,7 @@ void main() {
     float lum = dot(col, vec3(0.299, 0.587, 0.114));
     col = mix(col, mix(vec3(lum), vec3(0.93, 0.91, 0.86), 0.3 + 0.5 * lum), amt);
   }
-  col *= 1.0 - 0.5 * vChar;              // scorched where it tore
+  col *= 1.0 - 0.5 * vChar * vp;         // scorched where it tore
   if (!gl_FrontFacing) col *= 0.35;      // seen from behind
 
   float a = t * smoothstep(0.0, 1.0, uReveal);
@@ -448,7 +461,7 @@ void main() {
 export class Viewer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 1);
 
@@ -795,7 +808,6 @@ export class Viewer {
     geo.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
     geo.setAttribute('aChar', new THREE.BufferAttribute(mesh.char, 1));
-    geo.setAttribute('aFace', new THREE.BufferAttribute(mesh.face, 1));
     geo.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
     const mat = new THREE.ShaderMaterial({
       uniforms: { ...this.uniforms, uMap: { value: this._photoTexture(bitmap) }, uStretch: this.stretchUniform },

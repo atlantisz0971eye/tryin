@@ -131,43 +131,6 @@ function buildMesh(W, H, snapZ, edgeMark, rayX, rayY, jump) {
     }
   }
 
-  // How squarely each vertex faced the capture camera (1 = head-on, 0 = edge-on). The shader compares
-  // this with how squarely it faces the viewer now: a patch that was edge-on when photographed but
-  // is seen face-on from the side carries almost no picture, so it is stretched thin and dissolved.
-  const face = new Float32Array(N).fill(1);
-  const P3 = positions;
-  const diff = (i, j, out, o) => {
-    out[o] = P3[j * 3] - P3[i * 3];
-    out[o + 1] = P3[j * 3 + 1] - P3[i * 3 + 1];
-    out[o + 2] = P3[j * 3 + 2] - P3[i * 3 + 2];
-  };
-  const tx = new Float32Array(3), ty = new Float32Array(3), tmp = new Float32Array(3);
-  const tangent = (out, i, lo, hi) => {
-    // central difference when both sides join this surface, else one-sided, never across a tear
-    const okLo = lo >= 0 && Math.abs(logZ[i] - logZ[lo]) <= jump;
-    const okHi = hi >= 0 && Math.abs(logZ[i] - logZ[hi]) <= jump;
-    if (okLo && okHi) diff(lo, hi, out, 0);
-    else if (okHi) diff(i, hi, out, 0);
-    else if (okLo) diff(lo, i, out, 0);
-    else { out[0] = out[1] = out[2] = 0; return false; }
-    return true;
-  };
-  for (let v = 0; v < H; v++) {
-    for (let u = 0; u < W; u++) {
-      const i = v * W + u;
-      const okX = tangent(tx, i, u > 0 ? i - 1 : -1, u < W - 1 ? i + 1 : -1);
-      const okY = tangent(ty, i, v > 0 ? i - W : -1, v < H - 1 ? i + W : -1);
-      if (!okX || !okY) continue;
-      tmp[0] = tx[1] * ty[2] - tx[2] * ty[1];
-      tmp[1] = tx[2] * ty[0] - tx[0] * ty[2];
-      tmp[2] = tx[0] * ty[1] - tx[1] * ty[0];
-      const nl = Math.hypot(tmp[0], tmp[1], tmp[2]);
-      const pl = Math.hypot(P3[i * 3], P3[i * 3 + 1], P3[i * 3 + 2]);
-      if (nl < 1e-9 || pl < 1e-9) continue;
-      face[i] = Math.abs(tmp[0] * P3[i * 3] + tmp[1] * P3[i * 3 + 1] + tmp[2] * P3[i * 3 + 2]) / (nl * pl);
-    }
-  }
-
   // scorch field: seeded on the torn edge, spread a few pixels along the same surface
   let cur = new Float32Array(N);
   for (let i = 0; i < N; i++) cur[i] = edgeMark[i] ? 1 : 0;
@@ -191,7 +154,7 @@ function buildMesh(W, H, snapZ, edgeMark, rayX, rayY, jump) {
     [cur, nxt] = [nxt, cur];
   }
 
-  return { positions, uvs, char: cur, face, indices: indices.slice(0, n), triangles: n / 3, width: W, height: H };
+  return { positions, uvs, char: cur, indices: indices.slice(0, n), triangles: n / 3, width: W, height: H };
 }
 
 function medianBelow(values, limit) {
