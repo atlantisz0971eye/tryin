@@ -3,52 +3,84 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Atom · 凝固的一瞬</title>
-  <meta name="description" content="上传任意一张照片，把那一瞬间凝固成可以走进去的粒子空间。照片只在你的设备上处理。" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='3' fill='%23d8d2c6'/></svg>" />
+  <title>tryin'</title>
+  <meta name="description" content="上传任意一张照片或一段短视频，把那一瞬间凝固成可以走进去的粒子空间。素材只在你的设备上处理。" />
+  <meta name="theme-color" content="#1b1a18" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='1' width='14' height='14' fill='%231b1a18'/><rect x='3' y='3' width='10' height='8' fill='%23d8d2c6'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Noto+Serif+SC:wght@300;400&display=swap" />
   <link rel="stylesheet" href="src/style.css" />
   <script type="importmap">
     { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js" } }
   </script>
 </head>
 <body>
-  <canvas id="stage"></canvas>
+  <main class="desk">
+    <div class="card" id="card">
+      <!-- front of the print: the moment itself -->
+      <section class="face front" aria-hidden="false">
+        <div class="photo" id="photo">
+          <canvas id="stage"></canvas>
 
-  <section id="intro" class="overlay">
-    <div class="intro-inner">
-      <h1>Atom</h1>
-      <p class="lede">把一瞬间凝固下来，然后走进去。<br />如果是一段视频，你走动，时间就跟着走。</p>
-      <label id="drop" class="drop">
-        <input id="file" type="file" accept="image/*,video/*" hidden />
-        <span class="drop-title">选择或拖入一张照片或一段短视频</span>
-        <span class="drop-sub">JPG / PNG / MP4。视频取前 10 秒，镜头尽量别动</span>
-      </label>
-      <p class="fine">照片只在你的设备上处理，不会上传到任何地方。首次使用需要下载约 20–50 MB 的深度模型，之后会缓存。</p>
-    </div>
-  </section>
+          <section id="intro" class="overlay">
+            <div class="intro-inner">
+              <h1>tryin'</h1>
+              <p class="lede">把一瞬间凝固下来，然后走进去。<br />如果是一段视频，你走动，时间就跟着走。</p>
+              <label id="drop" class="drop">
+                <input id="file" type="file" accept="image/*,video/*" hidden />
+                <span class="drop-title">选择或拖入一张照片或一段短视频</span>
+                <span class="drop-sub">jpg / png / mp4 · 视频取前 10 秒，镜头尽量别动</span>
+              </label>
+              <p class="fine">素材只在你的设备上处理，不会上传到任何地方。<br />首次使用需要下载约 20–50 MB 的深度模型，之后会缓存。</p>
+            </div>
+          </section>
 
-  <section id="busy" class="overlay hidden" aria-live="polite">
-    <div class="busy-inner">
-      <div class="pulse"></div>
-      <p id="busy-text">准备中</p>
-      <div class="bar"><div id="busy-bar"></div></div>
-    </div>
-  </section>
+          <section id="busy" class="overlay hidden" aria-live="polite">
+            <div class="busy-inner">
+              <div class="pulse"></div>
+              <p id="busy-text">准备中</p>
+              <div class="bar"><div id="busy-bar"></div></div>
+            </div>
+          </section>
 
-  <div id="hud" class="hidden">
-    <div class="hud-top">
-      <button id="btn-new" type="button">换一张</button>
-      <button id="btn-home" type="button">回到原点</button>
-      <button id="btn-panel" type="button" aria-expanded="false">参数</button>
+          <div id="hud" class="hidden">
+            <div class="hud-bottom">
+              <span id="dist">站在拍摄点</span>
+              <span id="tstat" class="hidden"></span>
+              <span class="hint" id="hint"></span>
+            </div>
+            <canvas id="diagram" class="hidden" width="160" height="160" aria-label="闵可夫斯基时空图"></canvas>
+          </div>
+        </div>
+
+        <footer class="margin">
+          <button id="btn-home" class="label" type="button">回到原点</button>
+          <button id="btn-menu" class="label" type="button" aria-label="翻到背面：参数与换素材">tryin'</button>
+        </footer>
+        <p class="credit">致敬 James Blake《Trying Times》</p>
+      </section>
+
+      <!-- back of the print: settings, written on the paper -->
+      <section class="face back" aria-hidden="true">
+        <div class="photo paper">
+          <div class="back-inner">
+            <header class="back-head">
+              <span class="back-title">tryin'</span>
+              <button id="btn-new" class="ink-btn" type="button">换素材</button>
+            </header>
+            <aside id="panel"></aside>
+          </div>
+        </div>
+
+        <footer class="margin">
+          <button id="btn-flip-back" class="label" type="button">翻回去</button>
+          <button id="btn-menu-back" class="label mirrored" type="button" aria-label="翻回正面">tryin'</button>
+        </footer>
+        <p class="credit">致敬 James Blake《Trying Times》</p>
+      </section>
     </div>
-    <div class="hud-bottom">
-      <span id="dist">站在拍摄点</span>
-      <span id="tstat" class="hidden"></span>
-      <span class="hint" id="hint">拖动看四周 · WASD / 滚轮 移动 · Q E 升降 · 双指缩放前进</span>
-    </div>
-    <canvas id="diagram" class="hidden" width="160" height="160" aria-label="闵可夫斯基时空图"></canvas>
-    <aside id="panel" class="hidden"></aside>
-  </div>
+  </main>
 
   <script type="module" src="src/main.js"></script>
 </body>
