@@ -37,6 +37,7 @@ const state = {
   bleach: 0,
   immersive: true,
   bgStrength: 1,
+  feather: 0.15,
   softness: 1,
   device: '',
   stats: null,
@@ -126,6 +127,10 @@ function renderPanel() {
   panel.appendChild(sliderRow({ label: '背景亮度', min: 0, max: 1.6, step: 0.05, unit: '' }, state.bgStrength, (v) => {
     state.bgStrength = v;
     viewer.setBackgroundStrength(v);
+  }));
+  panel.appendChild(sliderRow({ label: '边缘融合', min: 0, max: 0.35, step: 0.01, unit: '' }, state.feather, (v) => {
+    state.feather = v;
+    viewer.setFeather(v);
   }));
   const imm = document.createElement('div');
   imm.className = 'checks';
