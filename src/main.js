@@ -328,8 +328,8 @@ viewer.onTick = (dt, pos) => {
   if (hudClock < 0.1) return;
   hudClock = 0;
   tstatEl.textContent = `v ${observer.speed.toFixed(2)} m/s · β ${model.beta.toFixed(2)} · 此刻 ${model.t0.toFixed(1)} / ${model.duration.toFixed(1)} s`;
-  if (!panel.classList.contains('hidden')) syncCalibration();
-  if (anchorInput && !panel.classList.contains('hidden') && document.activeElement !== anchorInput) {
+  if (flipped) syncCalibration();
+  if (anchorInput && flipped && document.activeElement !== anchorInput) {
     anchorInput.value = model.t0;
     anchorOut.textContent = `${model.t0.toFixed(2)} s`;
   }
@@ -406,6 +406,7 @@ function showError(msg) {
 function showScene() {
   busy.classList.add('hidden');
   hud.classList.remove('hidden');
+  $('btn-home').disabled = false;
   $('hint').textContent = hintText();
   const video = state.mode === 'video';
   tstatEl.classList.toggle('hidden', !video);
@@ -415,9 +416,9 @@ function showScene() {
 function hintText() {
   const touch = matchMedia('(pointer: coarse)').matches;
   const move = touch
-    ? '单指拖动看四周 · 双指张合前进后退 · 双指平移侧移'
-    : '拖动看四周 · WASD / 滚轮 移动 · Q E 升降';
-  return state.mode === 'video' ? `${move} · 动起来，此刻就会倾斜；走得越多，时间走得越远` : move;
+    ? '单指看四周 · 双指张合前进 · 双指平移侧移'
+    : '拖动看四周 · wasd / 滚轮 移动 · q e 升降';
+  return state.mode === 'video' ? `${move} · 动起来，此刻就会倾斜` : move;
 }
 
 const isVideo = (blob, name = '') => blob.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|ogv)$/i.test(name);
@@ -562,7 +563,10 @@ function rebuild() {
 
 const fileInput = $('file');
 fileInput.onchange = () => {
-  if (fileInput.files[0]) loadMedia(fileInput.files[0]);
+  if (fileInput.files[0]) {
+    setFlipped(false);
+    loadMedia(fileInput.files[0]);
+  }
   fileInput.value = '';
 };
 
@@ -582,15 +586,41 @@ window.addEventListener('paste', (e) => {
   if (item) loadMedia(item.getAsFile());
 });
 
+// ---------------------------------------------------------------- the print: front and back
+
+const card = $('card');
+const desk = card.parentElement;
+const front = card.querySelector('.front'), back = card.querySelector('.back');
+let flipped = false;
+
+function setFlipped(on) {
+  if (on === flipped) return;
+  flipped = on;
+  desk.classList.remove('turning');
+  void desk.offsetWidth; // restart the lift animation
+  desk.classList.add('turning');
+  card.classList.toggle('flipped', on);
+  front.setAttribute('aria-hidden', String(on));
+  back.setAttribute('aria-hidden', String(!on));
+  // the scene keeps running underneath; it just is not drawn while the back is up
+  setTimeout(() => desk.classList.remove('turning'), 1150);
+  if (on) setTimeout(() => { viewer.paused = flipped; }, 1150);
+  else viewer.paused = false;
+  if (on) syncCalibration();
+}
+
+$('btn-menu').onclick = () => setFlipped(true);
+$('btn-menu-back').onclick = () => setFlipped(false);
+$('btn-flip-back').onclick = () => setFlipped(false);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && flipped) setFlipped(false);
+});
+
 $('btn-new').onclick = () => fileInput.click();
 $('btn-home').onclick = () => {
   viewer.resetView();
   model.reset(observer.walked);
   trail.length = 0;
-};
-$('btn-panel').onclick = () => {
-  const open = panel.classList.toggle('hidden') === false;
-  $('btn-panel').setAttribute('aria-expanded', String(open));
 };
 
 const distEl = $('dist');
@@ -603,6 +633,7 @@ viewer.onMove = (d) => {
 };
 
 $('hint').textContent = hintText();
+$('btn-home').disabled = true;
 renderPanel();
 
 // ?src=<image or video url> loads a file directly (handy for sharing examples and for testing)

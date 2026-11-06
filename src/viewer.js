@@ -80,7 +80,7 @@ void main() {
     // only the picture itself melts into the backdrop (shadow and ash halos would smear dark
     // across it); these layers just thin out towards the border
     float t = edgeT(pix);
-    hide = fract(h * 91.7) > pow(t, 6.0);
+    hide = fract(h * 91.7) > smoothstep(0.85, 1.0, t);
     vAlpha *= t;
     vSoft = sizeSoft;
     vEdge = 1.0;
@@ -486,6 +486,9 @@ export class Viewer {
     this._bindInput();
     this._resize();
     window.addEventListener('resize', () => this._resize());
+    // the canvas lives inside the print's frame, which can change size on its own
+    if (window.ResizeObserver) new ResizeObserver(() => this._resize()).observe(canvas);
+    this.paused = false;
     this.timer = new THREE.Timer();
     this.renderer.setAnimationLoop(() => this._frame());
   }
@@ -834,6 +837,7 @@ export class Viewer {
     this.camera.rotation.set(this.lookPitch, this.lookYaw, 0);
     this.bg.position.copy(this.pos);
     if (this.onMove) this.onMove(this.pos.length());
+    if (this.paused) return;
     const r = this.renderer;
     r.setRenderTarget(this.accum);
     r.setClearColor(0x000000, 0);
