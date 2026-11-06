@@ -89,6 +89,15 @@ function pick(off, n, start) {
   return out;
 }
 
+function medianBelow(values, limit) {
+  const step = Math.max(1, Math.floor(values.length / 20000));
+  const sample = [];
+  for (let i = 0; i < values.length; i += step) if (values[i] < limit) sample.push(values[i]);
+  if (!sample.length) return limit;
+  sample.sort((a, b) => a - b);
+  return sample[sample.length >> 1];
+}
+
 function percentile(values, q) {
   const step = Math.max(1, Math.floor(values.length / 20000));
   const sample = [];
@@ -340,6 +349,8 @@ export function buildScene(input, opts = {}) {
     focal: f,
     vfov: (2 * Math.atan(H / 2 / f) * 180) / Math.PI,
     tears: tears.length / 3,
+    // where the subject is: median depth of everything that is not sky
+    focusDepth: medianBelow(z, skyZ),
   };
   return out;
 }
