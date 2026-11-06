@@ -410,10 +410,38 @@ function showBusy(text, progress = null) {
   if (progress !== null) busyBar.style.width = `${Math.round(progress * 100)}%`;
 }
 
+// ---------------------------------------------------------------- guide arrows
+// Hand-drawn arrows to the two corner labels. Always on the landing page; after a picture appears
+// they show once more for a few seconds, until the person has turned the print over once.
+
+const guide = $('guide');
+let menuSeen = false;
+try { menuSeen = localStorage.getItem('tryin.menuSeen') === '1'; } catch (_) { /* not remembered */ }
+let guideTimer = 0;
+
+function setGuide(on) {
+  clearTimeout(guideTimer);
+  guide.classList.toggle('on', on);
+  $('btn-menu').classList.toggle('attention', on && !menuSeen);
+}
+
+function nudgeMenu() {
+  if (menuSeen) return;
+  setGuide(true);
+  guideTimer = setTimeout(() => setGuide(false), 7000);
+}
+
+function markMenuSeen() {
+  menuSeen = true;
+  try { localStorage.setItem('tryin.menuSeen', '1'); } catch (_) { /* not remembered */ }
+  setGuide(false);
+}
+
 function showError(msg) {
   busy.classList.add('hidden');
   intro.classList.remove('hidden');
   hud.classList.add('hidden');
+  setGuide(true);
   let el = intro.querySelector('.error');
   if (!el) {
     el = document.createElement('p');
@@ -426,7 +454,6 @@ function showError(msg) {
 function showScene() {
   busy.classList.add('hidden');
   hud.classList.remove('hidden');
-  $('btn-home').disabled = false;
   $('hud-handle').classList.remove('hidden');
   $('hint').textContent = hintText();
   const video = state.mode === 'video';
@@ -436,6 +463,8 @@ function showScene() {
   if (prompt && motionSupported() && !state.walkOffered && !state.walking) {
     state.walkOffered = true;
     prompt.classList.remove('hidden');
+  } else {
+    nudgeMenu();
   }
 }
 
@@ -453,6 +482,7 @@ const isVideo = (blob, name = '') => blob.type.startsWith('video/') || /\.(mp4|m
 async function loadMedia(source) {
   const token = ++state.loadToken;
   intro.classList.add('hidden');
+  setGuide(false);
   showBusy(tr('busy.read'));
   let blob;
   try {
@@ -626,6 +656,7 @@ back.inert = true;
 function setFlipped(on) {
   if (on === flipped) return;
   flipped = on;
+  if (on) markMenuSeen();
   desk.classList.remove('turning');
   void desk.offsetWidth; // restart the lift animation
   desk.classList.add('turning');
@@ -720,6 +751,7 @@ document.addEventListener('visibilitychange', async () => {
 function dismissWalkPrompt() {
   const prompt = $('walk-prompt');
   if (prompt) prompt.remove();
+  nudgeMenu();
 }
 $('btn-walk-go').onclick = () => {
   startWalking(); // first, while still inside the tap, as iOS requires for the permission prompt
@@ -779,6 +811,7 @@ handle.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------- language
 
 applyStatic();
+setGuide(true);
 setDrawer(false);
 distEl.textContent = tr('dist.origin');
 $('btn-lang').onclick = () => setLang(getLang() === 'en' ? 'zh' : 'en');
@@ -790,7 +823,6 @@ onLangChange(() => {
 });
 
 $('hint').textContent = hintText();
-$('btn-home').disabled = true;
 renderPanel();
 
 // ?src=<image or video url> loads a file directly (handy for sharing examples and for testing)
