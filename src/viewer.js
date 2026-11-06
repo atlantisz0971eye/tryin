@@ -18,6 +18,7 @@ uniform float uIsPhoto;
 uniform vec2 uGrid;
 uniform float uFocal;
 uniform float uSoft;
+uniform float uSoftMul;
 uniform float uSoftLo;
 uniform float uSoftHi;
 uniform float uFeather;
@@ -72,7 +73,7 @@ void main() {
   // once a point is blown up on screen it turns into a soft blob: up close the cloud reads as
   // out-of-focus light instead of hard coins
   vec2 pix = position.xy / max(-position.z, 1e-4) * uFocal * vec2(1.0, -1.0) + uGrid * 0.5;
-  float sizeSoft = uSoft * smoothstep(uSoftLo, uSoftHi, ps);
+  float sizeSoft = uSoft * uSoftMul * smoothstep(uSoftLo, uSoftHi, ps);
   bool hide = false;
   if (uIsPhoto > 0.5) {
     edgeBlend(pix, ps, sizeSoft);
@@ -229,6 +230,7 @@ uniform float uSizeMul;
 uniform float uReveal;
 uniform float uBleach;
 uniform float uSoft;
+uniform float uSoftMul;
 uniform float uSoftLo;
 uniform float uSoftHi;
 uniform float uFeather;
@@ -361,7 +363,7 @@ void main() {
   ps *= smoothstep(h * 0.6, h * 0.6 + 0.4, uReveal);
   vAlpha = 1.0;
   vColor = col;
-  edgeBlend(pix, ps, uSoft * smoothstep(uSoftLo, uSoftHi, ps));
+  edgeBlend(pix, ps, uSoft * uSoftMul * smoothstep(uSoftLo, uSoftHi, ps));
   if (uIsPlate > 0.5 && vEdge < 0.98) visible = false;
   if (!visible || d < 0.03) {
     gl_PointSize = 0.0;
@@ -369,6 +371,77 @@ void main() {
   } else {
     gl_PointSize = min(max(ps, 1.0), uMaxPx * (1.0 + 3.0 * (1.0 - vEdge))) * uPassScale;
   }
+}
+`;
+
+// The photo as a height-field mesh textured with the full-resolution picture. Colour comes from the
+// texture, so it stays sharp however coarse the depth grid is; geometry only decides where it sits.
+const MESH_VERT = /* glsl */ `
+attribute float aChar;
+attribute float aFace;
+varying vec2 vUv;
+varying float vChar;
+varying float vFace;
+varying vec3 vWorld;
+void main() {
+  vUv = uv;
+  vChar = aChar;
+  vFace = aFace;
+  vWorld = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const MESH_FRAG = /* glsl */ `
+precision highp float;
+uniform sampler2D uMap;
+uniform vec2 uGrid;
+uniform float uFeather;
+uniform float uReveal;
+uniform float uBleach;
+uniform float uStretch;
+varying vec2 vUv;
+varying float vChar;
+varying float vFace;
+varying vec3 vWorld;
+
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+void main() {
+  vec2 pix = vUv * uGrid;
+  float edge = min(min(pix.x, uGrid.x - pix.x), min(pix.y, uGrid.y - pix.y)) / (uFeather * max(uGrid.x, uGrid.y) + 1e-4);
+  float t = uFeather > 0.0 ? smoothstep(0.0, 1.0, clamp(edge, 0.0, 1.0)) : 1.0;
+
+  // torn silhouettes crumble: the closer to the torn edge, the more of it is gone
+  float h = hash21(floor(vUv * uGrid * 3.0));
+  if (vChar * 0.7 > 0.2 + 0.8 * h) discard;
+
+  // Stretched picture: how squarely this patch faces you now, against how squarely it faced the
+  // camera. A big jump means a sliver of the photo smeared over a wide area; dissolve it into grain.
+  vec3 nrm = cross(dFdx(vWorld), dFdy(vWorld));
+  float nl = length(nrm);
+  float facingNow = nl > 1e-12 ? abs(dot(nrm / nl, normalize(cameraPosition - vWorld))) : 1.0;
+  float k = smoothstep(uStretch * 0.5, uStretch * 1.6, facingNow / (vFace + 0.03));
+  if (k > h) discard;
+
+  // the picture's border melts into the backdrop: blurrier and fainter towards the edge
+  vec3 col = textureLod(uMap, vUv, (1.0 - t) * 4.5).rgb;
+
+  if (uBleach > 0.0) {
+    float amt = uBleach * smoothstep(0.2, 3.0, length(cameraPosition));
+    float lum = dot(col, vec3(0.299, 0.587, 0.114));
+    col = mix(col, mix(vec3(lum), vec3(0.93, 0.91, 0.86), 0.3 + 0.5 * lum), amt);
+  }
+  col *= 1.0 - 0.5 * vChar;              // scorched where it tore
+  if (!gl_FrontFacing) col *= 0.35;      // seen from behind
+
+  float a = t * smoothstep(0.0, 1.0, uReveal);
+  if (a < 0.01) discard;
+  gl_FragColor = vec4(col, a);
 }
 `;
 
@@ -427,6 +500,11 @@ export class Viewer {
     };
     this.feather = 0.15;
     this.halos = {};
+    this.wanted = {};          // which layers the person wants shown
+    this.surface = 'mesh';     // 'mesh' (sharp photo mesh) or 'particles'
+    this.stretchUniform = { value: 4 };
+    this.photoTex = null;
+    this.photoTexSrc = null;
     this.bgUniforms = {
       uBg: { value: null },
       uBgFrame: { value: 0 },
@@ -543,6 +621,7 @@ export class Viewer {
     for (const obj of Object.values(this.layers)) this.scene.add(obj);
     this._addHalo('photo', this.layers.photo);
     this._addHalo('shadow', this.layers.shadow);
+    this._applyVisibility();
     this.uniforms.uGrid.value.set(built.meta.width, built.meta.height);
     this.uniforms.uFocal.value = built.meta.focal;
     this.camera.fov = built.meta.vfov;
@@ -589,7 +668,7 @@ export class Viewer {
     geo.setAttribute('position', new THREE.BufferAttribute(grid, 3));
     const make = (isPlate) => {
       const mat = new THREE.ShaderMaterial({
-        uniforms: { ...this.uniforms, ...u, uIsPlate: { value: isPlate ? 1 : 0 } },
+        uniforms: { ...this.uniforms, ...u, uIsPlate: { value: isPlate ? 1 : 0 }, uSoftMul: { value: 1 } },
         vertexShader: TIME_VERT,
         fragmentShader: FRAG_SOLID,
       });
@@ -601,6 +680,9 @@ export class Viewer {
     for (const obj of Object.values(this.layers)) this.scene.add(obj);
     this._addHalo('frames', this.layers.frames);
     this._addHalo('plate', this.layers.plate);
+    this._applyVisibility();
+    // the photo texture is only for photo mode
+    if (this.photoTex) { this.photoTex.dispose(); this.photoTex = null; this.photoTexSrc = null; }
     this.camera.fov = tf.vfov;
     this._resize();
     this.revealStart = this.timer.getElapsed();
@@ -635,7 +717,7 @@ export class Viewer {
     geo.setAttribute('aOffR', new THREE.BufferAttribute(layer.offRight || zero, 3));
     geo.setAttribute('aOffD', new THREE.BufferAttribute(layer.offDown || zero, 3));
     const mat = new THREE.ShaderMaterial({
-      uniforms: { ...this.uniforms, uIsPhoto: { value: isPhoto ? 1 : 0 } },
+      uniforms: { ...this.uniforms, uIsPhoto: { value: isPhoto ? 1 : 0 }, uSoftMul: { value: 1 } },
       vertexShader: VERT,
       fragmentShader: frag,
       transparent,
@@ -648,8 +730,85 @@ export class Viewer {
   }
 
   setLayerVisible(name, visible) {
-    if (this.layers[name]) this.layers[name].visible = visible;
-    if (this.halos[name]) this.halos[name].visible = visible;
+    this.wanted[name] = visible;
+    this._applyVisibility();
+  }
+
+  // how much stretching of the photo is tolerated before it dissolves (higher = more)
+  setStretch(v) { this.stretchUniform.value = v; }
+
+  setRenderMode(mode) {
+    this.surface = mode;
+    this._applyVisibility();
+  }
+
+  // 'photo' means whichever surface is active: the textured mesh or the photo particles
+  _applyVisibility() {
+    const w = this.wanted, L = this.layers, H = this.halos;
+    const mesh = this.surface === 'mesh' && !!L.mesh;
+    const set = (obj, on) => { if (obj) obj.visible = on; };
+    const photo = w.photo !== false;
+    set(L.photo, photo && !mesh);
+    set(H.photo, photo && !mesh);
+    set(L.mesh, photo && mesh);
+    for (const k of ['shadow', 'ash', 'frames', 'plate']) {
+      set(L[k], w[k] !== false);
+      set(H[k], w[k] !== false);
+    }
+    // halos ignore depth, so with the mesh in front the shadow stays as plain discs
+    if (L.shadow) L.shadow.material.uniforms.uSoftMul.value = mesh ? 0 : 1;
+  }
+
+  _photoTexture(bitmap) {
+    if (this.photoTex && this.photoTexSrc === bitmap) return this.photoTex;
+    if (this.photoTex) this.photoTex.dispose();
+    const coarse = matchMedia('(pointer: coarse)').matches;
+    const cap = Math.min(this.renderer.capabilities.maxTextureSize, coarse ? 2560 : 4096);
+    const scale = Math.min(1, cap / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.flipY = false;   // v runs down the picture, matching the mesh UVs
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    this.photoTex = tex;
+    this.photoTexSrc = bitmap;
+    return tex;
+  }
+
+  // mesh: from build.js; bitmap: the full-resolution picture
+  setPhotoMesh(mesh, bitmap) {
+    if (this.layers.mesh) {
+      this.scene.remove(this.layers.mesh);
+      this.layers.mesh.geometry.dispose();
+      this.layers.mesh.material.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
+    geo.setAttribute('aChar', new THREE.BufferAttribute(mesh.char, 1));
+    geo.setAttribute('aFace', new THREE.BufferAttribute(mesh.face, 1));
+    geo.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { ...this.uniforms, uMap: { value: this._photoTexture(bitmap) }, uStretch: this.stretchUniform },
+      vertexShader: MESH_VERT,
+      fragmentShader: MESH_FRAG,
+      transparent: true,
+      side: THREE.DoubleSide,
+    });
+    const obj = new THREE.Mesh(geo, mat);
+    obj.frustumCulled = false;
+    this.layers.mesh = obj;
+    this.scene.add(obj);
+    this._applyVisibility();
   }
 
   // frames: array of small blurred RGBA images (one for a photo, one per frame for a video)
