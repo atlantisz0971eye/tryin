@@ -432,9 +432,10 @@ function showScene() {
   const video = state.mode === 'video';
   tstatEl.classList.toggle('hidden', !video);
   diagramEl.classList.toggle('hidden', !video || !state.time.diagram);
-  if (motionSupported() && !state.walkOffered && !state.walking) {
+  const prompt = $('walk-prompt');
+  if (prompt && motionSupported() && !state.walkOffered && !state.walking) {
     state.walkOffered = true;
-    $('walk-prompt').classList.remove('hidden');
+    prompt.classList.remove('hidden');
   }
 }
 
@@ -715,11 +716,16 @@ document.addEventListener('visibilitychange', async () => {
   }
 });
 
+// once answered, the invitation is removed from the page entirely so no layer of it can linger
+function dismissWalkPrompt() {
+  const prompt = $('walk-prompt');
+  if (prompt) prompt.remove();
+}
 $('btn-walk-go').onclick = () => {
-  $('walk-prompt').classList.add('hidden');
-  startWalking(); // still inside the tap, as iOS requires for the permission prompt
+  startWalking(); // first, while still inside the tap, as iOS requires for the permission prompt
+  dismissWalkPrompt();
 };
-$('btn-walk-stay').onclick = () => $('walk-prompt').classList.add('hidden');
+$('btn-walk-stay').onclick = dismissWalkPrompt;
 
 const distEl = $('dist');
 let lastDist = -1;

@@ -382,6 +382,9 @@ export class Viewer {
     this.scene = new THREE.Scene();
     this.bgTexture = null;
     this.renderer.autoClear = false;
+    // the soft halos need a float render target; without one, skip them rather than draw garbage
+    const ext = this.renderer.extensions;
+    this.halosOk = ext.has('EXT_color_buffer_float') || ext.has('EXT_color_buffer_half_float');
 
     // soft halos are accumulated at half resolution, then averaged over the sharp scene
     this.haloScene = new THREE.Scene();
@@ -863,7 +866,7 @@ export class Viewer {
     r.setRenderTarget(this.accum);
     r.setClearColor(0x000000, 0);
     r.clear();
-    const halos = this.uniforms.uSoft.value > 0 || this.uniforms.uFeather.value > 0;
+    const halos = this.halosOk && (this.uniforms.uSoft.value > 0 || this.uniforms.uFeather.value > 0);
     if (halos) r.render(this.haloScene, this.camera);
     r.setRenderTarget(null);
     r.setClearColor(0x000000, 1);
