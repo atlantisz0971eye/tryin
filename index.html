@@ -45,14 +45,17 @@
           </section>
 
           <div id="hud" class="hidden">
-            <div class="hud-bottom">
-              <span id="dist"></span>
-              <span id="tstat" class="hidden"></span>
+            <div class="hud-bottom" id="hud-drawer" aria-hidden="true">
+              <div class="hud-line">
+                <span id="dist"></span>
+                <span id="tstat" class="hidden"></span>
+              </div>
               <span class="hint" id="hint"></span>
             </div>
           </div>
         </div>
 
+        <button id="hud-handle" class="hidden" type="button" aria-expanded="false" aria-controls="hud-drawer" data-i18n-aria="hud.show"></button>
         <canvas id="diagram" class="hidden" data-i18n-aria="diagram.aria"></canvas>
         <footer class="margin">
           <button id="btn-home" class="label" type="button" data-i18n="label.home"></button>

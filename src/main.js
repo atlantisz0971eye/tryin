@@ -406,6 +406,7 @@ function showScene() {
   busy.classList.add('hidden');
   hud.classList.remove('hidden');
   $('btn-home').disabled = false;
+  $('hud-handle').classList.remove('hidden');
   $('hint').textContent = hintText();
   const video = state.mode === 'video';
   tstatEl.classList.toggle('hidden', !video);
@@ -629,12 +630,48 @@ viewer.onMove = (d) => {
   distEl.textContent = r < 0.1 ? tr('dist.origin') : tr('dist.away', { d: r.toFixed(1) });
 };
 
+// ---------------------------------------------------------------- status drawer
+
+// The status text lives in a drawer under the picture, closed by default. Tap the pull dot to
+// toggle it, or drag it up to open and down to close.
+const handle = $('hud-handle');
+const drawer = $('hud-drawer');
+let drawerOpen = false;
+
+function setDrawer(open) {
+  drawerOpen = open;
+  hud.classList.toggle('drawer-open', open);
+  handle.setAttribute('aria-expanded', String(open));
+  handle.setAttribute('aria-label', tr(open ? 'hud.hide' : 'hud.show'));
+  drawer.setAttribute('aria-hidden', String(!open));
+}
+
+let dragFrom = null;
+handle.addEventListener('pointerdown', (e) => {
+  dragFrom = e.clientY;
+  handle.setPointerCapture(e.pointerId);
+});
+handle.addEventListener('pointerup', (e) => {
+  if (dragFrom === null) return;
+  const dy = e.clientY - dragFrom;
+  dragFrom = null;
+  if (dy < -8) setDrawer(true);
+  else if (dy > 8) setDrawer(false);
+  else setDrawer(!drawerOpen);
+});
+handle.addEventListener('pointercancel', () => { dragFrom = null; });
+handle.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrawer(!drawerOpen); }
+});
+
 // ---------------------------------------------------------------- language
 
 applyStatic();
+setDrawer(false);
 distEl.textContent = tr('dist.origin');
 $('btn-lang').onclick = () => setLang(getLang() === 'en' ? 'zh' : 'en');
 onLangChange(() => {
+  setDrawer(drawerOpen);
   renderPanel();
   $('hint').textContent = hintText();
   lastDist = -1; // rewrite the distance line on the next frame

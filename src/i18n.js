@@ -18,6 +18,8 @@ const STRINGS = {
     'btn.langAria': '切换到中文',
     'credit': "inspired by James Blake's Trying Times, Interstellar, Minkowski spacetime and the Andromeda paradox",
     'diagram.aria': 'Minkowski diagram',
+    'hud.show': 'Show details',
+    'hud.hide': 'Hide details',
 
     'err.model': 'Could not load the depth model. Check your connection and reload.',
     'err.read': 'Could not read that. Try another file.',
@@ -103,6 +105,8 @@ const STRINGS = {
     'btn.langAria': 'Switch to English',
     'credit': '灵感来自 James Blake《Trying Times》、《星际穿越》、闵可夫斯基时空与"仙女座悖论"',
     'diagram.aria': '闵可夫斯基时空图',
+    'hud.show': '显示信息',
+    'hud.hide': '收起信息',
 
     'err.model': '深度模型加载失败，请检查网络后刷新重试。',
     'err.read': '读取失败，换一个文件试试。',
