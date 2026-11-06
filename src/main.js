@@ -40,6 +40,8 @@ const state = {
   sizeMul: 1.4,
   bleach: 0,
   immersive: true,
+  surface: 'mesh',       // photo mode: 'mesh' (sharp textured mesh) or 'particles'
+  stretch: 4,
   assist: true,
   walking: false,
   walkOffered: false,    // the walk-in invitation shows once per visit
@@ -113,6 +115,16 @@ const VIDEO_SLIDERS = [
 function renderPanel() {
   panel.innerHTML = '';
   if (state.mode === 'video') renderVideoControls();
+  else {
+    panel.appendChild(selectRow('surface', { mesh: 'surface.mesh', particles: 'surface.particles' }, state.surface, (v) => {
+      state.surface = v;
+      viewer.setRenderMode(v);
+    }));
+    panel.appendChild(sliderRow({ label: 'stretch', min: 2, max: 40, step: 1, unit: '' }, state.stretch, (v) => {
+      state.stretch = v;
+      viewer.setStretch(v);
+    }));
+  }
 
   const sliders = state.mode === 'video' ? VIDEO_SLIDERS : PHOTO_SLIDERS;
   const target = state.mode === 'video' ? state.timeParams : state.params;
@@ -602,6 +614,8 @@ function rebuild() {
       const built = buildScene(state.depth, state.params);
       const buildMs = performance.now() - t0;
       viewer.setScene(built);
+      viewer.setPhotoMesh(built.mesh, state.bitmap);
+      viewer.setRenderMode(state.surface);
       viewer.setFocusDepth(built.meta.focusDepth);
       state.walkRange = Math.min(6, Math.max(1, 0.35 * built.meta.focusDepth));
       const thumb = blurThumb(state.depth.rgba, state.depth.width, state.depth.height);

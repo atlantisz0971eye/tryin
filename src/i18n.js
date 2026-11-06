@@ -56,6 +56,10 @@ const STRINGS = {
     'calib': 'scene depth {r} m · walkable about {w} m · pace {p} m/s',
     'calib.manual': ' (by hand)',
 
+    stretch: 'stretch tolerance',
+    surface: 'surface',
+    'surface.mesh': 'sharp photo mesh',
+    'surface.particles': 'particles',
     far: 'far distance',
     near: 'near distance',
     fov: 'field of view',
@@ -155,6 +159,10 @@ const STRINGS = {
     'calib': '场景纵深 {r} m · 可走范围约 {w} m · 步速 {p} m/s',
     'calib.manual': '（手动）',
 
+    stretch: '拉伸容忍度',
+    surface: '画面',
+    'surface.mesh': '清晰照片网格',
+    'surface.particles': '粒子',
     far: '远处距离',
     near: '近处距离',
     fov: '视场角',
