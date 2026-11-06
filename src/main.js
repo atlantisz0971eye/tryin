@@ -7,6 +7,7 @@ import { TimeModel, PRESETS, DRIVERS, END_MODES } from './timemodel.js';
 import { blurThumb } from './glow.js';
 import { t as tr, getLang, setLang, onLangChange, applyStatic } from './i18n.js';
 import { drawDiagram } from './diagram.js';
+import { MotionWalker, motionSupported, requestMotionPermission } from './motion.js';
 
 const $ = (id) => document.getElementById(id);
 const intro = $('intro'), busy = $('busy'), hud = $('hud'), panel = $('panel');
@@ -16,6 +17,8 @@ const viewer = new Viewer($('stage'));
 const worker = new Worker(new URL('./depth-worker.js', import.meta.url), { type: 'module' });
 const observer = new Observer();
 const model = new TimeModel();
+const walker = new MotionWalker();
+viewer.motion = walker;
 
 const state = {
   mode: 'photo',      // 'photo' | 'video'
@@ -38,6 +41,9 @@ const state = {
   bleach: 0,
   immersive: true,
   assist: true,
+  walking: false,
+  walkOffered: false,    // the walk-in invitation shows once per visit
+  walkRange: 3,          // metres you can comfortably walk in this scene
   bgStrength: 1,
   feather: 0.15,
   softness: 1,
@@ -145,6 +151,21 @@ function renderPanel() {
     viewer.setAssist(on);
   }));
   panel.appendChild(imm);
+
+  if (motionSupported()) {
+    const walk = document.createElement('div');
+    walk.className = 'checks';
+    walk.appendChild(checkbox('walkToggle', state.walking, (on) => {
+      if (on) startWalking(); else stopWalking();
+    }));
+    panel.appendChild(walk);
+    panel.appendChild(sliderRow({ label: 'walkScale', min: 0.3, max: 3, step: 0.05, unit: '×' }, walker.scale, (v) => {
+      walker.scale = v;
+    }));
+    panel.appendChild(sliderRow({ label: 'stepLength', min: 0.4, max: 1, step: 0.05, unit: ' m' }, walker.stepLength, (v) => {
+      walker.stepLength = v;
+    }));
+  }
 
   const res = document.createElement('div');
   res.className = 'row';
@@ -411,6 +432,10 @@ function showScene() {
   const video = state.mode === 'video';
   tstatEl.classList.toggle('hidden', !video);
   diagramEl.classList.toggle('hidden', !video || !state.time.diagram);
+  if (motionSupported() && !state.walkOffered && !state.walking) {
+    state.walkOffered = true;
+    $('walk-prompt').classList.remove('hidden');
+  }
 }
 
 function hintText() {
@@ -418,6 +443,7 @@ function hintText() {
   const move = touch
     ? tr('hint.touch')
     : tr('hint.mouse');
+  if (state.walking) return tr('hint.walk');
   return state.mode === 'video' ? `${move} · ${tr('hint.video')}` : move;
 }
 
@@ -532,6 +558,7 @@ function rebuild() {
       viewer.setTimeField(tf);
       model.setDepthStats(tf.depthStats, model.depthStats ? undefined : defaultPace());
       viewer.setFocusDepth(tf.depthStats.median);
+      state.walkRange = model.calib ? model.calib.range : 3;
       syncCalibration();
       const thumbs = state.clip.frames.map((f) => blurThumb(f, tf.width, tf.height));
       viewer.setBackground(thumbs.map((t) => t.data), thumbs[0].width, thumbs[0].height);
@@ -545,6 +572,7 @@ function rebuild() {
       const buildMs = performance.now() - t0;
       viewer.setScene(built);
       viewer.setFocusDepth(built.meta.focusDepth);
+      state.walkRange = Math.min(6, Math.max(1, 0.35 * built.meta.focusDepth));
       const thumb = blurThumb(state.depth.rgba, state.depth.width, state.depth.height);
       viewer.setBackground([thumb.data], thumb.width, thumb.height);
       for (const [k, on] of Object.entries(state.layers)) viewer.setLayerVisible(k, on);
@@ -628,13 +656,80 @@ window.addEventListener('keydown', (e) => {
 
 $('btn-new').onclick = () => fileInput.click();
 $('btn-home').onclick = () => {
-  viewer.resetView();
+  if (state.walking) {
+    // you cannot be moved back physically: wherever you stand and face becomes the capture point
+    viewer.pos.set(0, 0, 0);
+    observer.reset([0, 0, 0]);
+    walker.recenter();
+  } else {
+    viewer.resetView();
+  }
   model.reset(observer.walked);
 };
 
+// ---------------------------------------------------------------- walking with the phone
+
+let wakeLock = null;
+
+async function startWalking() {
+  let ok = false;
+  try { ok = await requestMotionPermission(); } catch (_) { ok = false; }
+  if (!ok) {
+    $('hint').textContent = tr('walk.denied');
+    setDrawer(true);
+    renderPanel();
+    return;
+  }
+  state.walking = true;
+  viewer.pos.set(0, 0, 0);
+  observer.reset([0, 0, 0]);
+  model.reset(observer.walked);
+  walker.start();
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) { wakeLock = null; }
+  updateWalkingUi();
+}
+
+function stopWalking() {
+  state.walking = false;
+  walker.stop();
+  viewer.yaw = viewer.lookYaw;
+  viewer.pitch = 0;
+  try { wakeLock?.release(); } catch (_) { /* already released */ }
+  wakeLock = null;
+  updateWalkingUi();
+}
+
+function updateWalkingUi() {
+  const home = $('btn-home');
+  home.dataset.i18n = state.walking ? 'label.recenter' : 'label.home';
+  home.textContent = tr(home.dataset.i18n);
+  $('hint').textContent = hintText();
+  $('edge-warn').style.opacity = '0';
+  renderPanel();
+}
+
+// the screen lock is dropped when the page is hidden; take it again on return
+document.addEventListener('visibilitychange', async () => {
+  if (state.walking && document.visibilityState === 'visible') {
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) { wakeLock = null; }
+  }
+});
+
+$('btn-walk-go').onclick = () => {
+  $('walk-prompt').classList.add('hidden');
+  startWalking(); // still inside the tap, as iOS requires for the permission prompt
+};
+$('btn-walk-stay').onclick = () => $('walk-prompt').classList.add('hidden');
+
 const distEl = $('dist');
 let lastDist = -1;
+const edgeWarn = $('edge-warn');
 viewer.onMove = (d) => {
+  if (state.walking) {
+    // darken the edges as you walk past the space this moment can hold
+    const R = state.walkRange;
+    edgeWarn.style.opacity = String(Math.min(1, Math.max(0, (d - 1.3 * R) / (0.7 * R))));
+  }
   const r = Math.round(d * 10) / 10;
   if (r === lastDist) return;
   lastDist = r;
