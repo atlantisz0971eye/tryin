@@ -39,6 +39,17 @@ function alignTo(d, ref, step) {
   return [a, b];
 }
 
+// Median / 10th / 90th percentile of scene depth in metres, sky excluded.
+export function sceneDepthStats(depth, skyLimit) {
+  const step = Math.max(1, Math.floor(depth.length / 20000));
+  const vals = [];
+  for (let i = 0; i < depth.length; i += step) if (depth[i] < skyLimit) vals.push(depth[i]);
+  if (vals.length < 10) for (let i = 0; i < depth.length; i += step) vals.push(depth[i]);
+  vals.sort((a, b) => a - b);
+  const q = (x) => vals[Math.min(vals.length - 1, Math.floor(x * vals.length))];
+  return { p10: q(0.1), median: q(0.5), p90: q(0.9) };
+}
+
 export function buildTimeField(input, opts = {}) {
   const P = { ...TIME_DEFAULTS, ...opts };
   const { width: W, height: H, frames, disparities, fps } = input;
@@ -134,8 +145,12 @@ export function buildTimeField(input, opts = {}) {
     plateColor[i * 4 + 3] = k;
   }
 
+  // 6. scene scale from the middle frame, ignoring sky (it sits at the far limit)
+  const depthStats = sceneDepthStats(depth.subarray(refIndex * N, (refIndex + 1) * N), P.far * 0.9);
+
   const focal = Math.max(W, H) / 2 / Math.tan((P.fov * Math.PI) / 360);
   return {
+    depthStats,
     width: W,
     height: H,
     frames: F,
