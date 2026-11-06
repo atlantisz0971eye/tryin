@@ -469,8 +469,15 @@ export class Viewer {
     this.wheelVel = 0;
 
     this.pos = new THREE.Vector3();
+    // yaw / pitch are the viewer's own look offset; lookYaw / lookPitch is where the camera faces
+    // after the gaze assist turns it towards the subject
     this.yaw = 0;
     this.pitch = 0;
+    this.lookYaw = 0;
+    this.lookPitch = 0;
+    this.assist = true;
+    this.focus = new THREE.Vector3(0, 0, -5);
+    this.prevPos = new THREE.Vector3();
     this.keys = new Set();
     this.returning = null;
     this.onMove = null;
@@ -753,9 +760,19 @@ export class Viewer {
     return { dist: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
   }
 
+  setAssist(on) {
+    // keep the view where it is when switching, so nothing jumps
+    if (on) { this.yaw = 0; this.pitch = 0; } else { this.yaw = this.lookYaw; this.pitch = this.lookPitch; }
+    this.assist = on;
+  }
+
+  setFocusDepth(d) {
+    this.focus.set(0, 0, -Math.max(0.5, d));
+  }
+
   // forward / right / up in metres, relative to where the viewer faces (horizontal plane)
   _moveLocal(fwd, right, up) {
-    const s = Math.sin(this.yaw), c = Math.cos(this.yaw);
+    const s = Math.sin(this.lookYaw), c = Math.cos(this.lookYaw);
     this.pos.x += -s * fwd + c * right;
     this.pos.z += -c * fwd - s * right;
     this.pos.y += up;
@@ -791,10 +808,30 @@ export class Viewer {
       if (r.t >= 1) this.returning = null;
     }
 
+    // gaze assist: face the subject while moving sideways, so walking becomes orbiting the moment
+    let baseYaw = 0, basePitch = 0;
+    if (this.assist) {
+      const d = this.focus.clone().sub(this.pos);
+      // fade out as you reach the subject, so the view never flips when passing it
+      const w = THREE.MathUtils.smoothstep(-d.z, 0.5, 1.5);
+      baseYaw = w * Math.atan2(-d.x, -d.z);
+      basePitch = w * Math.atan2(d.y, Math.hypot(d.x, d.z));
+      // your own look offset relaxes back only while you move
+      const moved = this.pos.distanceTo(this.prevPos) / Math.max(dt, 1e-3);
+      if (moved > 0.05 && !this.returning) {
+        const k = Math.exp(-dt / 1.5);
+        this.yaw *= k;
+        this.pitch *= k;
+      }
+    }
+    this.prevPos.copy(this.pos);
+    this.lookYaw = baseYaw + this.yaw;
+    this.lookPitch = Math.max(-1.45, Math.min(1.45, basePitch + this.pitch));
+
     if (this.onTick) this.onTick(dt, this.pos);
 
     this.camera.position.copy(this.pos);
-    this.camera.rotation.set(this.pitch, this.yaw, 0);
+    this.camera.rotation.set(this.lookPitch, this.lookYaw, 0);
     this.bg.position.copy(this.pos);
     if (this.onMove) this.onMove(this.pos.length());
     const r = this.renderer;
