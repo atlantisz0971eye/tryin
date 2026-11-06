@@ -31,6 +31,10 @@ const STRINGS = {
     'label.recenter': 're-center',
     'hint.walk': 'turn to look · push the stick to move · re-center to start over',
     'edge.warn': 'you are reaching the edge of the moment, turn around',
+    'rec.start': 'Record what you see',
+    'rec.stop': 'Stop recording',
+    'rec.saved': 'saved',
+    'rec.failed': 'This browser cannot record video.',
     'hud.show': 'Show details',
     'hud.hide': 'Hide details',
 
@@ -139,6 +143,10 @@ const STRINGS = {
     'label.recenter': '重新对准',
     'hint.walk': '转动手机看四周 · 推摇杆移动 · 点重新对准从头开始',
     'edge.warn': '快走到这一瞬间的边缘了，转身回去吧',
+    'rec.start': '录下你看到的',
+    'rec.stop': '停止录制',
+    'rec.saved': '已保存',
+    'rec.failed': '这个浏览器不支持录屏。',
     'hud.show': '显示信息',
     'hud.hide': '收起信息',
 

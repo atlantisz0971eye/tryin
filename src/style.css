@@ -340,6 +340,36 @@ h1 {
 
 #hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 
+/* record button, top right of the picture: a ring with a dot, red while recording */
+#btn-rec {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 34px;
+  min-width: 34px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 250, 240, 0.45);
+  border-radius: 17px;
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 250, 240, 0.9);
+  font: 12px/1 ui-monospace, Menlo, monospace;
+  letter-spacing: 0.04em;
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+#btn-rec #rec-time:not(:empty) { margin-left: 8px; }
+#btn-rec i { width: 12px; height: 12px; border-radius: 50%; background: rgba(255, 250, 240, 0.85); transition: background 0.2s, border-radius 0.2s; }
+#btn-rec.on { border-color: #e0574f; }
+#btn-rec.on i { background: #e0574f; border-radius: 3px; animation: recpulse 1.2s ease-in-out infinite; }
+@keyframes recpulse { 50% { opacity: 0.45; } }
+#btn-rec:focus-visible { outline: 1px solid var(--line); outline-offset: 2px; }
+
 .hud-bottom {
   position: absolute;
   left: 50%;

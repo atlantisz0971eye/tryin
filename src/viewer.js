@@ -1255,5 +1255,6 @@ export class Viewer {
     r.clear();
     r.render(this.scene, this.camera);
     if (halos) r.render(this.compScene, this.compCamera);
+    if (this.afterRender) this.afterRender();
   }
 }

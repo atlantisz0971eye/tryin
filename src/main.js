@@ -10,6 +10,7 @@ import { drawDiagram } from './diagram.js';
 import { stabilizeFrames } from './stabilize.js';
 import { MotionWalker, motionSupported, requestMotionPermission } from './motion.js';
 import { Stick } from './stick.js';
+import { Recorder, recordingSupported, saveFile } from './recorder.js';
 
 const $ = (id) => document.getElementById(id);
 const intro = $('intro'), busy = $('busy'), hud = $('hud'), panel = $('panel');
@@ -358,6 +359,29 @@ const diagramEl = $('diagram');
 const stickEl = $('stick');
 new Stick(stickEl, $('stick-knob'), (x, y) => { viewer.stick.x = x; viewer.stick.y = y; });
 const tstatEl = $('tstat');
+
+// ---------------------------------------------------------------- recording
+
+const recBtn = $('btn-rec');
+const recTime = $('rec-time');
+const recorder = new Recorder(viewer.canvas);
+viewer.afterRender = () => recorder.capture();
+recorder.onTick = (s) => {
+  recTime.textContent = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+};
+recorder.onStop = async (file) => {
+  recBtn.classList.remove('on');
+  recTime.textContent = '';
+  recBtn.setAttribute('aria-label', tr('rec.start'));
+  if (file) await saveFile(file);
+};
+recBtn.onclick = () => {
+  if (recorder.active) { recorder.stop(); return; }
+  if (!recorder.start()) { $('hint').textContent = tr('rec.failed'); return; }
+  recBtn.classList.add('on');
+  recBtn.setAttribute('aria-label', tr('rec.stop'));
+};
+
 let hudClock = 0;
 
 viewer.onTick = (dt, pos) => {
@@ -490,6 +514,7 @@ function showScene() {
   tstatEl.classList.toggle('hidden', !video);
   diagramEl.classList.toggle('hidden', !video || !state.time.diagram);
   stickEl.classList.remove('hidden');
+  if (recordingSupported()) recBtn.classList.remove('hidden');
   // full push covers the walkable range in about four seconds, whatever the scene
   viewer.stickSpeed = Math.min(2.2, Math.max(0.5, state.walkRange / 4));
   const prompt = $('walk-prompt');
@@ -890,4 +915,4 @@ const src = new URLSearchParams(location.search).get('src');
 if (src) loadMedia(src);
 
 // exposed for tinkering from the devtools console
-window.atom = { viewer, state, rebuild, model, observer, estimateDepth };
+window.atom = { viewer, state, rebuild, model, observer, estimateDepth, recorder };
