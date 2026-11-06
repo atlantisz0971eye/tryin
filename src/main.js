@@ -36,6 +36,7 @@ const state = {
   sizeMul: 1.4,
   bleach: 0,
   immersive: true,
+  assist: true,
   bgStrength: 1,
   feather: 0.15,
   softness: 1,
@@ -137,6 +138,10 @@ function renderPanel() {
   imm.appendChild(checkbox('沉浸背景（边缘渐隐）', state.immersive, (on) => {
     state.immersive = on;
     viewer.setImmersive(on);
+  }));
+  imm.appendChild(checkbox('移动时自动正对画面', state.assist, (on) => {
+    state.assist = on;
+    viewer.setAssist(on);
   }));
   panel.appendChild(imm);
 
@@ -526,6 +531,7 @@ function rebuild() {
       const buildMs = performance.now() - t0;
       viewer.setTimeField(tf);
       model.setDepthStats(tf.depthStats, model.depthStats ? undefined : defaultPace());
+      viewer.setFocusDepth(tf.depthStats.median);
       syncCalibration();
       const thumbs = state.clip.frames.map((f) => blurThumb(f, tf.width, tf.height));
       viewer.setBackground(thumbs.map((t) => t.data), thumbs[0].width, thumbs[0].height);
@@ -538,6 +544,7 @@ function rebuild() {
       const built = buildScene(state.depth, state.params);
       const buildMs = performance.now() - t0;
       viewer.setScene(built);
+      viewer.setFocusDepth(built.meta.focusDepth);
       const thumb = blurThumb(state.depth.rgba, state.depth.width, state.depth.height);
       viewer.setBackground([thumb.data], thumb.width, thumb.height);
       for (const [k, on] of Object.entries(state.layers)) viewer.setLayerVisible(k, on);
