@@ -285,7 +285,13 @@ float depthAt(ivec2 p, float f) {
   float fl = floor(f);
   int i0 = int(fl);
   int i1 = min(i0 + 1, int(uFrames) - 1);
-  return mix(texelFetch(uDepth, ivec3(p, i0), 0).r, texelFetch(uDepth, ivec3(p, i1), 0).r, ease(f - fl));
+  float d0 = texelFetch(uDepth, ivec3(p, i0), 0).r;
+  float d1 = texelFetch(uDepth, ivec3(p, i1), 0).r;
+  // A surface that jumped in depth between two moments (something moved through this pixel) cannot
+  // be halfway between them: blending would leave points floating between the layers. Take the
+  // nearer moment's depth; the colour below still fades, so nothing pops.
+  if (abs(log(d1 / d0)) > uJump) return (f - fl) < 0.5 ? d0 : d1;
+  return mix(d0, d1, ease(f - fl));
 }
 
 vec3 colorAt(ivec2 p, float f) {
