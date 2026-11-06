@@ -89,6 +89,111 @@ function pick(off, n, start) {
   return out;
 }
 
+// A height-field mesh from the capture camera's point of view: one vertex per depth pixel, with UVs
+// into the full-resolution photo so the picture stays sharp however coarse the depth is.
+// Triangles that straddle a depth tear are left out, so the tears stay open exactly as in the
+// particle version. `char` is 1 on the occluder's torn edge and fades over two pixels along the
+// same surface (never across a tear); the shader scorches and crumbles with it.
+function buildMesh(W, H, snapZ, edgeMark, rayX, rayY, jump) {
+  const N = W * H;
+  const positions = new Float32Array(N * 3);
+  const uvs = new Float32Array(N * 2);
+  const logZ = new Float32Array(N);
+  for (let v = 0; v < H; v++) {
+    for (let u = 0; u < W; u++) {
+      const i = v * W + u;
+      const d = snapZ[i];
+      positions[i * 3] = rayX(u) * d;
+      positions[i * 3 + 1] = rayY(v) * d;
+      positions[i * 3 + 2] = -d;
+      uvs[i * 2] = (u + 0.5) / W;
+      uvs[i * 2 + 1] = (v + 0.5) / H;
+      logZ[i] = Math.log(d);
+    }
+  }
+
+  const indices = new Uint32Array(6 * (W - 1) * (H - 1));
+  let n = 0;
+  const ok = (a, b, c) =>
+    Math.abs(logZ[a] - logZ[b]) <= jump && Math.abs(logZ[b] - logZ[c]) <= jump && Math.abs(logZ[a] - logZ[c]) <= jump;
+  for (let v = 0; v < H - 1; v++) {
+    for (let u = 0; u < W - 1; u++) {
+      const a = v * W + u, b = a + 1, c = a + W, d = c + 1;
+      // split the quad along the diagonal whose ends are closest in depth
+      // wound counter-clockwise as seen from the capture camera (v runs downwards, so x then y flips)
+      if (Math.abs(logZ[a] - logZ[d]) < Math.abs(logZ[b] - logZ[c])) {
+        if (ok(a, b, d)) { indices[n++] = a; indices[n++] = d; indices[n++] = b; }
+        if (ok(a, d, c)) { indices[n++] = a; indices[n++] = c; indices[n++] = d; }
+      } else {
+        if (ok(a, b, c)) { indices[n++] = a; indices[n++] = c; indices[n++] = b; }
+        if (ok(b, d, c)) { indices[n++] = b; indices[n++] = c; indices[n++] = d; }
+      }
+    }
+  }
+
+  // How squarely each vertex faced the capture camera (1 = head-on, 0 = edge-on). The shader compares
+  // this with how squarely it faces the viewer now: a patch that was edge-on when photographed but
+  // is seen face-on from the side carries almost no picture, so it is stretched thin and dissolved.
+  const face = new Float32Array(N).fill(1);
+  const P3 = positions;
+  const diff = (i, j, out, o) => {
+    out[o] = P3[j * 3] - P3[i * 3];
+    out[o + 1] = P3[j * 3 + 1] - P3[i * 3 + 1];
+    out[o + 2] = P3[j * 3 + 2] - P3[i * 3 + 2];
+  };
+  const tx = new Float32Array(3), ty = new Float32Array(3), tmp = new Float32Array(3);
+  const tangent = (out, i, lo, hi) => {
+    // central difference when both sides join this surface, else one-sided, never across a tear
+    const okLo = lo >= 0 && Math.abs(logZ[i] - logZ[lo]) <= jump;
+    const okHi = hi >= 0 && Math.abs(logZ[i] - logZ[hi]) <= jump;
+    if (okLo && okHi) diff(lo, hi, out, 0);
+    else if (okHi) diff(i, hi, out, 0);
+    else if (okLo) diff(lo, i, out, 0);
+    else { out[0] = out[1] = out[2] = 0; return false; }
+    return true;
+  };
+  for (let v = 0; v < H; v++) {
+    for (let u = 0; u < W; u++) {
+      const i = v * W + u;
+      const okX = tangent(tx, i, u > 0 ? i - 1 : -1, u < W - 1 ? i + 1 : -1);
+      const okY = tangent(ty, i, v > 0 ? i - W : -1, v < H - 1 ? i + W : -1);
+      if (!okX || !okY) continue;
+      tmp[0] = tx[1] * ty[2] - tx[2] * ty[1];
+      tmp[1] = tx[2] * ty[0] - tx[0] * ty[2];
+      tmp[2] = tx[0] * ty[1] - tx[1] * ty[0];
+      const nl = Math.hypot(tmp[0], tmp[1], tmp[2]);
+      const pl = Math.hypot(P3[i * 3], P3[i * 3 + 1], P3[i * 3 + 2]);
+      if (nl < 1e-9 || pl < 1e-9) continue;
+      face[i] = Math.abs(tmp[0] * P3[i * 3] + tmp[1] * P3[i * 3 + 1] + tmp[2] * P3[i * 3 + 2]) / (nl * pl);
+    }
+  }
+
+  // scorch field: seeded on the torn edge, spread a few pixels along the same surface
+  let cur = new Float32Array(N);
+  for (let i = 0; i < N; i++) cur[i] = edgeMark[i] ? 1 : 0;
+  let nxt = new Float32Array(N);
+  for (let iter = 0; iter < 2; iter++) {
+    nxt.set(cur);
+    for (let v = 0; v < H; v++) {
+      for (let u = 0; u < W; u++) {
+        const i = v * W + u;
+        let best = nxt[i];
+        const tryNeighbour = (j) => {
+          if (cur[j] * 0.55 > best && Math.abs(logZ[i] - logZ[j]) < jump * 0.75) best = cur[j] * 0.55;
+        };
+        if (u > 0) tryNeighbour(i - 1);
+        if (u < W - 1) tryNeighbour(i + 1);
+        if (v > 0) tryNeighbour(i - W);
+        if (v < H - 1) tryNeighbour(i + W);
+        nxt[i] = best;
+      }
+    }
+    [cur, nxt] = [nxt, cur];
+  }
+
+  return { positions, uvs, char: cur, face, indices: indices.slice(0, n), triangles: n / 3, width: W, height: H };
+}
+
 function medianBelow(values, limit) {
   const step = Math.max(1, Math.floor(values.length / 20000));
   const sample = [];
@@ -343,6 +448,7 @@ export function buildScene(input, opts = {}) {
   }
 
   const out = { photo: photo.finish(), shadow: shadow.finish(), ash: ash.finish() };
+  out.mesh = buildMesh(W, H, snapZ, edgeMark, rayX, rayY, P.jump);
   out.meta = {
     width: W,
     height: H,
