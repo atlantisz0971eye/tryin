@@ -16,9 +16,15 @@ export const PRESETS = {
 };
 
 export const DRIVERS = {
-  walk: '随步行累积：走才有时间，只进不退',
+  walk: '随步行累积：走才有时间，站着不动就凝固',
   fixed: '固定：此刻不动，只在移动时倾斜',
   clock: '时钟：此刻自己来回流动',
+};
+
+export const END_MODES = {
+  bounce: '往返：走到尽头，时间往回流',
+  loop: '循环：回到开头继续',
+  stop: '停在尽头',
 };
 
 const MAX_BETA = 0.95;
@@ -33,6 +39,8 @@ export class TimeModel {
     this.fps = 1;
     this.t0 = 0;                // seconds into the clip
     this.clockDir = 1;
+    this.endMode = 'bounce';
+    this.walkDir = 1;
     this.lastWalked = 0;
     this.beta = 0;
     this.gamma = 1;
@@ -52,7 +60,18 @@ export class TimeModel {
 
   reset(walked = 0) {
     this.t0 = this.startTime;
+    this.walkDir = 1;
     this.lastWalked = walked;
+  }
+
+  // keeps the walk inside the clip according to endMode
+  _wrap(t) {
+    const d = this.duration;
+    if (this.endMode === 'stop') return Math.min(d, Math.max(0, t));
+    if (this.endMode === 'loop') return ((t % d) + d) % d;
+    if (t > d) { this.walkDir = -1; return Math.max(0, 2 * d - t); }
+    if (t < 0) { this.walkDir = 1; return Math.min(d, -t); }
+    return t;
   }
 
   setPreset(name) {
@@ -65,7 +84,7 @@ export class TimeModel {
     this.lastWalked = observer.walked;
 
     if (this.driver === 'walk') {
-      this.t0 = Math.min(this.duration, this.t0 + walkedDelta * this.secondsPerMeter);
+      this.t0 = this._wrap(this.t0 + this.walkDir * walkedDelta * this.secondsPerMeter);
     } else if (this.driver === 'clock') {
       this.t0 += this.clockDir * dt * 0.5;
       if (this.t0 > this.duration) { this.t0 = this.duration; this.clockDir = -1; }

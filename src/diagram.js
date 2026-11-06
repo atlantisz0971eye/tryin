@@ -54,7 +54,8 @@ export function drawDiagram(canvas, model, pos, trail) {
   if (trail.length > 1) {
     ctx.strokeStyle = 'rgba(216, 210, 198, 0.7)';
     ctx.beginPath();
-    trail.forEach(([x, t], i) => (i ? ctx.lineTo(sx(x), sy(t)) : ctx.moveTo(sx(x), sy(t))));
+    // a loop jumps from the end back to the start: break the line there
+    trail.forEach(([x, t], i) => (i && Math.abs(t - trail[i - 1][1]) < dur / 2 ? ctx.lineTo(sx(x), sy(t)) : ctx.moveTo(sx(x), sy(t))));
     ctx.stroke();
   }
 
