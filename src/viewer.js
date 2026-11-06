@@ -705,6 +705,8 @@ export class Viewer {
     this.onTick = null;
     this.wheelVel = 0;
 
+    this.stick = { x: 0, y: 0 };
+    this.stickSpeed = 1.2;   // metres per second at full push
     this.pos = new THREE.Vector3();
     // yaw / pitch are the viewer's own look offset; lookYaw / lookPitch is where the camera faces
     // after the gaze assist turns it towards the subject
@@ -1177,6 +1179,11 @@ export class Viewer {
     const right = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
     const up = (k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
     if (fwd || right || up) this._moveLocal(fwd * speed, right * speed, up * speed);
+    // the thumb stick: push is speed, up is forward
+    if (this.stick.x || this.stick.y) {
+      this.returning = null;
+      this._moveLocal(this.stick.y * this.stickSpeed * dt, this.stick.x * this.stickSpeed * dt, 0);
+    }
     if (Math.abs(this.wheelVel) > 0.01) {
       this._moveLocal(this.wheelVel * dt, 0, 0);
       this.wheelVel *= Math.exp(-dt / 0.35);

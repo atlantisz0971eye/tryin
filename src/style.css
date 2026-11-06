@@ -169,18 +169,52 @@ html, body {
 #diagram {
   position: absolute;
   left: 50%;
-  bottom: calc(var(--mb) * 0.36 + env(safe-area-inset-bottom) - 2px);
+  top: 50%;
   width: 64px;
   height: 34px;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   pointer-events: none;
-  z-index: 2;
 }
+
+/* on touch screens the sketch is also a thumb stick: drag from its centre to move */
+#stick {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--mb) * 0.36 + env(safe-area-inset-bottom) + 21px - 44px);
+  width: 88px;
+  height: 88px;
+  margin-left: -44px;
+  z-index: 3;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#stick-ring, #stick-knob { position: absolute; left: 50%; top: 50%; pointer-events: none; border-radius: 50%; }
+#stick-ring {
+  width: 58px; height: 58px; margin: -29px 0 0 -29px;
+  border: 1px dashed var(--muted);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+#stick-knob {
+  width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  background: var(--paper, #f3ede0);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 10px rgba(255, 240, 210, 0.6);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+@media (pointer: coarse) {
+  #stick-ring { opacity: 0.55; }
+  #stick-knob { opacity: 0.9; }
+}
+#stick.held #stick-ring { opacity: 0.9; }
+@media (pointer: fine) { #stick { pointer-events: none; } }
 
 @media (max-width: 560px) {
   :root { --mb: 124px; }
   .margin { bottom: calc(var(--mb) * 0.44 + env(safe-area-inset-bottom)); }
-  #diagram { bottom: calc(var(--mb) * 0.44 + env(safe-area-inset-bottom) - 2px); }
+  #stick { bottom: calc(var(--mb) * 0.44 + env(safe-area-inset-bottom) + 21px - 44px); }
   #guide { bottom: calc(var(--mb) * 0.44 + 40px + env(safe-area-inset-bottom)); }
 }
 

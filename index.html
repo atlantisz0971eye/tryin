@@ -86,7 +86,11 @@
         </div>
 
         <button id="hud-handle" class="hidden" type="button" aria-expanded="false" aria-controls="hud-drawer" data-i18n-aria="hud.show"></button>
-        <canvas id="diagram" class="hidden" data-i18n-aria="diagram.aria"></canvas>
+        <div id="stick" class="hidden" role="application" aria-label="Move">
+          <canvas id="diagram" class="hidden" data-i18n-aria="diagram.aria"></canvas>
+          <span id="stick-ring"></span>
+          <span id="stick-knob"></span>
+        </div>
         <footer class="margin">
           <button id="btn-home" class="label" type="button" data-i18n="label.home"></button>
           <button id="btn-menu" class="label" type="button" data-i18n-aria="label.menuAria">tryin'</button>

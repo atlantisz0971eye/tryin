@@ -9,6 +9,7 @@ import { t as tr, getLang, setLang, onLangChange, applyStatic } from './i18n.js'
 import { drawDiagram } from './diagram.js';
 import { stabilizeFrames } from './stabilize.js';
 import { MotionWalker, motionSupported, requestMotionPermission } from './motion.js';
+import { Stick } from './stick.js';
 
 const $ = (id) => document.getElementById(id);
 const intro = $('intro'), busy = $('busy'), hud = $('hud'), panel = $('panel');
@@ -170,13 +171,19 @@ function renderPanel() {
     walk.appendChild(checkbox('walkToggle', state.walking, (on) => {
       if (on) startWalking(); else stopWalking();
     }));
+    walk.appendChild(checkbox('countSteps', walker.countSteps, (on) => {
+      walker.setCountSteps(on);
+      renderPanel();
+    }));
     panel.appendChild(walk);
-    panel.appendChild(sliderRow({ label: 'walkScale', min: 0.3, max: 3, step: 0.05, unit: '×' }, walker.scale, (v) => {
-      walker.scale = v;
-    }));
-    panel.appendChild(sliderRow({ label: 'stepLength', min: 0.4, max: 1, step: 0.05, unit: ' m' }, walker.stepLength, (v) => {
-      walker.stepLength = v;
-    }));
+    if (walker.countSteps) {
+      panel.appendChild(sliderRow({ label: 'walkScale', min: 0.3, max: 3, step: 0.05, unit: '×' }, walker.scale, (v) => {
+        walker.scale = v;
+      }));
+      panel.appendChild(sliderRow({ label: 'stepLength', min: 0.4, max: 1, step: 0.05, unit: ' m' }, walker.stepLength, (v) => {
+        walker.stepLength = v;
+      }));
+    }
   }
 
   const res = document.createElement('div');
@@ -341,6 +348,8 @@ function renderVideoControls() {
 // ---------------------------------------------------------------- time, every frame
 
 const diagramEl = $('diagram');
+const stickEl = $('stick');
+new Stick(stickEl, $('stick-knob'), (x, y) => { viewer.stick.x = x; viewer.stick.y = y; });
 const tstatEl = $('tstat');
 let hudClock = 0;
 
@@ -473,6 +482,9 @@ function showScene() {
   const video = state.mode === 'video';
   tstatEl.classList.toggle('hidden', !video);
   diagramEl.classList.toggle('hidden', !video || !state.time.diagram);
+  stickEl.classList.remove('hidden');
+  // full push covers the walkable range in about four seconds, whatever the scene
+  viewer.stickSpeed = Math.min(2.2, Math.max(0.5, state.walkRange / 4));
   const prompt = $('walk-prompt');
   if (prompt && motionSupported() && !state.walkOffered && !state.walking) {
     state.walkOffered = true;
