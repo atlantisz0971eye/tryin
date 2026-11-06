@@ -1,4 +1,4 @@
-"""Local dev server for Atom that disables caching, so edited ES modules are always reloaded."""
+"""Local dev server for Tryin' that disables caching, so edited ES modules are always reloaded."""
 import http.server
 import sys
 
