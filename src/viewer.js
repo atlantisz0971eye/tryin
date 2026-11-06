@@ -91,7 +91,10 @@ uniform float uFps;
 uniform float uJump;
 uniform float uIsPlate;
 uniform float uGhost;
-uniform int uMode;
+uniform vec3 uVel;
+uniform float uGamma;
+uniform vec3 uW;
+uniform float uTint;
 uniform vec2 uViewport;
 uniform float uPxScale;
 uniform float uMaxPx;
@@ -126,17 +129,22 @@ vec3 colorAt(ivec2 p, float f) {
   return mix(texelFetch(uColor, ivec3(p, i0), 0).rgb, texelFetch(uColor, ivec3(p, i1), 0).rgb, ease(f - fl));
 }
 
-// mode 0: at the original viewpoint everything is the anchor moment; stepping towards a particle
-//         carries it into its future, stepping away sends it into its past
-// mode 1: slow light - the farther a particle is from you, the older the moment you see
-float frameFor(ivec2 p, vec3 r) {
+// Which moment this particle shows (see timemodel.js):
+//   T = T0 + w.x * γ (v·r)/c²  (relativity of simultaneity)
+//          - w.y * |r|/c       (light travel time)
+//          + w.z * (|p|-|r|)/c (change in distance since the original viewpoint)
+float frameFor(ivec2 p, vec3 ray) {
   float fmax = uFrames - 1.0;
   float f = clamp(uAnchor, 0.0, fmax);
+  // the particle's position depends on the frame it shows, so settle it in two passes
   for (int k = 0; k < 2; k++) {
-    vec3 wp = r * depthAt(p, f);
-    float dc = distance(cameraPosition, wp);
-    float sec = uMode == 0 ? (length(wp) - dc) / uC : -dc / uC;
-    f = clamp((uMode == 0 ? uAnchor : fmax) + sec * uFps, 0.0, fmax);
+    vec3 wp = ray * depthAt(p, f);
+    vec3 r = wp - cameraPosition;
+    float dist = length(r);
+    float sec = uW.x * uGamma * dot(uVel, r) / (uC * uC)
+              - uW.y * dist / uC
+              + uW.z * (length(wp) - dist) / uC;
+    f = clamp(uAnchor + sec * uFps, 0.0, fmax);
   }
   return f;
 }
@@ -174,6 +182,10 @@ void main() {
     col = colorAt(p, f);
     zr = depthAt(pr, f);
     zd = depthAt(pd, f);
+    // time tint, after the Doppler shift: the future you move towards turns blue, the past red
+    float ahead = clamp((f - clamp(uAnchor, 0.0, uFrames - 1.0)) / (uFps * 2.0), -1.0, 1.0);
+    vec3 shift = ahead > 0.0 ? vec3(0.78, 0.93, 1.22) : vec3(1.22, 0.9, 0.74);
+    col = clamp(col * mix(vec3(1.0), shift, abs(ahead) * uTint), 0.0, 1.0);
     if (uBleach > 0.0) {
       float amt = uBleach * smoothstep(0.2, 3.0, length(cameraPosition));
       float lum = dot(col, vec3(0.299, 0.587, 0.114));
@@ -242,11 +254,13 @@ export class Viewer {
       uFps: { value: 8 },
       uJump: { value: 0.12 },
       uGhost: { value: 0.6 },
-      uMode: { value: 0 },
+      uVel: { value: new THREE.Vector3() },
+      uGamma: { value: 1 },
+      uW: { value: new THREE.Vector3(1, 0, 0) },
+      uTint: { value: 0.6 },
     };
-    this.timeFlow = false;
-    this.flowDir = 1;
-    this.onTime = null;
+    this.onTick = null;
+    this.wheelVel = 0;
 
     this.pos = new THREE.Vector3();
     this.yaw = 0;
@@ -340,13 +354,19 @@ export class Viewer {
     this.revealStart = this.timer.getElapsed();
   }
 
-  setTime({ anchor, c, mode, ghost, flow } = {}) {
+  setTime({ anchor, c, vel, gamma, weights, ghost, tint } = {}) {
     const u = this.timeUniforms;
     if (anchor !== undefined) u.uAnchor.value = anchor;
     if (c !== undefined) u.uC.value = c;
-    if (mode !== undefined) u.uMode.value = mode;
+    if (vel !== undefined) u.uVel.value.fromArray(vel);
+    if (gamma !== undefined) u.uGamma.value = gamma;
+    if (weights !== undefined) u.uW.value.fromArray(weights);
     if (ghost !== undefined) u.uGhost.value = ghost;
-    if (flow !== undefined) this.timeFlow = flow;
+    if (tint !== undefined) u.uTint.value = tint;
+  }
+
+  get isReturning() {
+    return !!this.returning;
   }
 
   _makePoints(layer, frag, transparent, isPhoto = false) {
@@ -435,10 +455,11 @@ export class Viewer {
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
 
+    // the wheel pushes you along with some inertia, so it reads as walking speed, not a jump
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.returning = null;
-      this._moveLocal(-e.deltaY * 0.003, 0, 0);
+      this.wheelVel = Math.max(-3, Math.min(3, this.wheelVel - e.deltaY * 0.004));
     }, { passive: false });
 
     window.addEventListener('keydown', (e) => {
@@ -476,6 +497,12 @@ export class Viewer {
     const right = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
     const up = (k.has('KeyE') ? 1 : 0) - (k.has('KeyQ') ? 1 : 0);
     if (fwd || right || up) this._moveLocal(fwd * speed, right * speed, up * speed);
+    if (Math.abs(this.wheelVel) > 0.01) {
+      this._moveLocal(this.wheelVel * dt, 0, 0);
+      this.wheelVel *= Math.exp(-dt / 0.35);
+    } else {
+      this.wheelVel = 0;
+    }
 
     if (this.returning) {
       const r = this.returning;
@@ -487,16 +514,7 @@ export class Viewer {
       if (r.t >= 1) this.returning = null;
     }
 
-    if (this.timeFlow && this.layers.frames) {
-      // let the anchor moment drift back and forth through the clip
-      const u = this.timeUniforms;
-      const fmax = u.uFrames.value - 1;
-      let a = u.uAnchor.value + this.flowDir * dt * u.uFps.value * 0.5;
-      if (a > fmax) { a = fmax; this.flowDir = -1; }
-      if (a < 0) { a = 0; this.flowDir = 1; }
-      u.uAnchor.value = a;
-      if (this.onTime) this.onTime(a);
-    }
+    if (this.onTick) this.onTick(dt, this.pos);
 
     this.camera.position.copy(this.pos);
     this.camera.rotation.set(this.pitch, this.yaw, 0);
