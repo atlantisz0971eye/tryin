@@ -90,6 +90,7 @@ void main() {
 // straight worldlines of the static world; they glow amber where the slice crosses them
 const LINE_VERT = /* glsl */ `
 attribute vec4 aColor;
+attribute float aW;
 uniform float uK;
 uniform float uDur;
 uniform float uRelief;
@@ -101,14 +102,14 @@ uniform float uLineA;
 varying vec3 vCol;
 varying float vA;
 void main() {
-  float t = position.w * uDur;
+  float t = aW * uDur;
   vec3 p = vec3(position.x, t * uK + position.y * uRelief, position.z);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   float tSlice = uT0 + uBeta * position.x / uC;
   float glow = exp(-pow((t - tSlice) / (uSigma * 2.5), 2.0));
   vec3 star = vec3(1.0, 0.72, 0.32);
   vCol = mix(mix(aColor.rgb, star, 0.55), star, glow);
-  vA = (aColor.a * uLineA) * (1.0 + 6.0 * glow);
+  vA = (aColor.a * uLineA) * (1.0 + 4.0 * glow);
 }
 `;
 
@@ -287,7 +288,12 @@ export class UniverseLab {
     this._add(new THREE.Points(floor, new THREE.ShaderMaterial({ uniforms: u, vertexShader: FLOOR_VERT, fragmentShader: POINT_FRAG, transparent: true, depthWrite: false })));
 
     const lines = new THREE.BufferGeometry();
-    lines.setAttribute('position', new THREE.BufferAttribute(data.lines.positions, 4));
+    // the line data is (x, y, z, w) with w = 0 at the start of time and 1 at the end
+    const lp = data.lines.positions, nl = lp.length / 4;
+    const lxyz = new Float32Array(nl * 3), lw = new Float32Array(nl);
+    for (let i = 0; i < nl; i++) { lxyz[i * 3] = lp[i * 4]; lxyz[i * 3 + 1] = lp[i * 4 + 1]; lxyz[i * 3 + 2] = lp[i * 4 + 2]; lw[i] = lp[i * 4 + 3]; }
+    lines.setAttribute('position', new THREE.BufferAttribute(lxyz, 3));
+    lines.setAttribute('aW', new THREE.BufferAttribute(lw, 1));
     lines.setAttribute('aColor', new THREE.BufferAttribute(data.lines.colors, 4, true));
     this._add(new THREE.LineSegments(lines, new THREE.ShaderMaterial({ uniforms: u, vertexShader: LINE_VERT, fragmentShader: LINE_FRAG, ...additive })));
 
@@ -318,13 +324,16 @@ export class UniverseLab {
     const span = Math.max(w, d, b.height);
     this.minDist = span * 0.35;
     this.maxDist = span * 4;
-    this.orbit = { az: 0.75, el: 0.32, dist: span * 1.9 };
+    this.span = span;
 
     this.active = true;
     this.root.classList.remove('hidden');
     this.playInput.checked = this.play = false;
     this._labels();
     this._resize();
+    // a tall phone screen sees less across, so start further back
+    this.orbit = { az: 0.75, el: 0.32, dist: span * 1.9 * Math.max(1, 0.9 / this.camera.aspect) };
+    this.orbit.dist = Math.min(this.orbit.dist, this.maxDist);
     this.clock = new THREE.Timer();
     this.renderer.setAnimationLoop(() => this._frame());
     return data;
@@ -387,10 +396,11 @@ export class UniverseLab {
     this.inside = this.insideTarget > this.inside ? Math.min(this.insideTarget, this.inside + step) : Math.max(this.insideTarget, this.inside - step);
     const m = ease(this.inside);
     u.uInside.value = m;
+    this.root.classList.toggle('inside', m > 0.5);
     u.uRelief.value = RELIEF + (1 - RELIEF) * m;
     u.uK.value = this.k * (1 + 1.5 * m);
     u.uGhostA.value = 0.14 + 0.06 * m;
-    u.uLineA.value = 0.3 * (1 - 0.6 * m);
+    u.uLineA.value = 0.16 * (1 - 0.6 * m);
     this.box.material.opacity = 0.55 * (1 - m);
     this.grid.material.opacity = 0.7 * (1 - m);
 

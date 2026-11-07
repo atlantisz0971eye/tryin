@@ -95,6 +95,9 @@ export function buildLabData(tf, { far = 25, duration = 1 } = {}) {
   // world has an edge (a building's corner draws the brightest line)
   const ls = 6;
   const linePos = [], lineCol = [];
+  // a facade collapses onto one spot of the ground, so keep a single worldline per ground cell
+  const cell = Math.max(span / 70, 0.15);
+  const taken = new Set();
   for (let y = ls; y < H - ls; y += ls) {
     for (let x = ls; x < W - ls; x += ls) {
       const i = y * W + x;
@@ -105,6 +108,9 @@ export function buildLabData(tf, { far = 25, duration = 1 } = {}) {
       if (edge < 0.06 && ((x / ls + y / ls) % 3 !== 0)) continue;
       const [rx, ry] = rayAt(x, y, W, H, focal);
       const X = rx * z, Y = ry * z, Z = -z;
+      const key = Math.round(X / cell) * 100003 + Math.round(z / cell);
+      if (taken.has(key)) continue;
+      taken.add(key);
       const r = tf.world.rgba[i * 4], g = tf.world.rgba[i * 4 + 1], b = tf.world.rgba[i * 4 + 2];
       linePos.push(X, Y, Z, 0, X, Y, Z, 1);           // w: 0 at the start of time, 1 at the end
       const s = edge >= 0.06 ? 255 : 150;
