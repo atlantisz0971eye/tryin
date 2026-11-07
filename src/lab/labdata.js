@@ -3,18 +3,20 @@
 //   vertical axis     time, the future upwards
 //   height            kept as a flattened relief (RELIEF of the real height) so people stay readable
 // The static layer is the "stellar spacetime": everything that stays put draws a straight, vertical
-// worldline, like the star in a block-universe diagram. The actor layer is the "earthly spacetime":
-// each frame's movers stacked upwards, so a walking person becomes a bent worldtube.
+// column of moments, like the star's worldline in a block-universe diagram. The actor layer is the
+// "earthly spacetime": each frame's movers stacked upwards, so a walking person becomes a bent
+// worldtube. The "now" slice itself is drawn on the GPU from the frames (lab.js).
 
 export const RELIEF = 0.15;
 const MAX_ACTOR_POINTS = 180000;   // per copy; each is drawn twice to fill the gap between frames
+const MAX_ACTOR_POINTS_COARSE = 70000;
 
 function rayAt(x, y, W, H, focal) {
   return [(x + 0.5 - W / 2) / focal, -(y + 0.5 - H / 2) / focal];
 }
 
 // tf: the time field from timefield.js (with world and the actor mask in color's alpha)
-export function buildLabData(tf, { far = 25, duration = 1 } = {}) {
+export function buildLabData(tf, { far = 25, duration = 1, coarse = false } = {}) {
   const { width: W, height: H, frames: F, focal } = tf;
   const N = W * H;
   const sky = far * 0.9;
@@ -40,7 +42,8 @@ export function buildLabData(tf, { far = 25, duration = 1 } = {}) {
   // actor layer: every moving pixel of every frame
   let count = 0;
   for (let i = 0; i < N * F; i++) if (tf.color[i * 4 + 3] > 128) count++;
-  const stride = count > MAX_ACTOR_POINTS ? Math.ceil(Math.sqrt(count / MAX_ACTOR_POINTS)) : 1;
+  const cap = coarse ? MAX_ACTOR_POINTS_COARSE : MAX_ACTOR_POINTS;
+  const stride = count > cap ? Math.ceil(Math.sqrt(count / cap)) : 1;
   const est = 2 * (Math.min(count, Math.ceil(count / (stride * stride)) + F * 64));
   let pos = new Float32Array(est * 3);
   let col = new Uint8Array(est * 3);
@@ -77,51 +80,40 @@ export function buildLabData(tf, { far = 25, duration = 1 } = {}) {
   }
   pos = pos.subarray(0, n * 3); col = col.subarray(0, n * 3); tim = tim.subarray(0, n);
 
-  // static layer, floor: the clean plate seen from above (with its relief), at the start of time
-  const fs = 2;
-  const floorPos = [], floorCol = [];
-  for (let y = 0; y < H; y += fs) {
-    for (let x = 0; x < W; x += fs) {
+  // static layer, time columns: every sampled pixel of the still world becomes a column of moments,
+  // one particle per frame in the colour that pixel really had then. A column is the whole history
+  // of one point of the world (a passer-by shows as a change of colour along it), so from above or
+  // below the block shows the clip itself.
+  const cs = coarse ? 6 : 4;
+  let cn = 0;
+  for (let y = 0; y < H; y += cs) for (let x = 0; x < W; x += cs) if (tf.world.depth[y * W + x] < sky) cn++;
+  const colPos = new Float32Array(cn * F * 3);
+  const colCol = new Uint8Array(cn * F * 3);
+  const colTim = new Float32Array(cn * F);
+  let m = 0;
+  for (let y = 0; y < H; y += cs) {
+    for (let x = 0; x < W; x += cs) {
       const i = y * W + x;
       const z = tf.world.depth[i];
       if (z >= sky) continue;
       const [rx, ry] = rayAt(x, y, W, H, focal);
-      floorPos.push(rx * z, ry * z, -z);
-      floorCol.push(tf.world.rgba[i * 4], tf.world.rgba[i * 4 + 1], tf.world.rgba[i * 4 + 2]);
-    }
-  }
-
-  // static layer, worldlines: sparse vertical lines through all of time, denser where the static
-  // world has an edge (a building's corner draws the brightest line)
-  const ls = 6;
-  const linePos = [], lineCol = [];
-  // a facade collapses onto one spot of the ground, so keep a single worldline per ground cell
-  const cell = Math.max(span / 70, 0.15);
-  const taken = new Set();
-  for (let y = ls; y < H - ls; y += ls) {
-    for (let x = ls; x < W - ls; x += ls) {
-      const i = y * W + x;
-      const z = tf.world.depth[i];
-      if (z >= sky) continue;
-      const zr = tf.world.depth[i + ls], zd = tf.world.depth[i + ls * W];
-      const edge = Math.max(Math.abs(Math.log(zr / z)), Math.abs(Math.log(zd / z)));
-      if (edge < 0.06 && ((x / ls + y / ls) % 3 !== 0)) continue;
-      const [rx, ry] = rayAt(x, y, W, H, focal);
-      const X = rx * z, Y = ry * z, Z = -z;
-      const key = Math.round(X / cell) * 100003 + Math.round(z / cell);
-      if (taken.has(key)) continue;
-      taken.add(key);
-      const r = tf.world.rgba[i * 4], g = tf.world.rgba[i * 4 + 1], b = tf.world.rgba[i * 4 + 2];
-      linePos.push(X, Y, Z, 0, X, Y, Z, 1);           // w: 0 at the start of time, 1 at the end
-      const s = edge >= 0.06 ? 255 : 150;
-      lineCol.push(r, g, b, s, r, g, b, s);
+      for (let f = 0; f < F; f++) {
+        colPos[m * 3] = rx * z;
+        colPos[m * 3 + 1] = ry * z;
+        colPos[m * 3 + 2] = -z;
+        const o = (f * N + i) * 4;
+        colCol[m * 3] = tf.color[o];
+        colCol[m * 3 + 1] = tf.color[o + 1];
+        colCol[m * 3 + 2] = tf.color[o + 2];
+        colTim[m] = f * dt;
+        m++;
+      }
     }
   }
 
   return {
     actors: { positions: pos, colors: col, times: tim, count: n, stride },
-    floor: { positions: new Float32Array(floorPos), colors: new Uint8Array(floorCol) },
-    lines: { positions: new Float32Array(linePos), colors: new Uint8Array(lineCol) },
+    columns: { positions: colPos, colors: colCol, times: colTim, stride: cs },
     bounds: { minX, maxX, minZ: -maxZ, maxZ: -minZ, height, k, duration, dt, frames: F },
   };
 }
