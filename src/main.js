@@ -11,6 +11,7 @@ import { stabilizeFrames } from './stabilize.js';
 import { MotionWalker, motionSupported, requestMotionPermission } from './motion.js';
 import { Stick } from './stick.js';
 import { Recorder, recordingSupported, saveFile } from './recorder.js';
+import { UniverseLab } from './lab/lab.js';
 
 const $ = (id) => document.getElementById(id);
 const intro = $('intro'), busy = $('busy'), hud = $('hud'), panel = $('panel');
@@ -283,6 +284,12 @@ function selectRow(label, options, current, onChange) {
 }
 
 function renderVideoControls() {
+  const labBtn = document.createElement('button');
+  labBtn.type = 'button';
+  labBtn.className = 'ink-btn panel-lab';
+  labBtn.textContent = tr('lab.open');
+  labBtn.onclick = openLab;
+  panel.appendChild(labBtn);
   const t = state.time;
   const presetLabels = Object.fromEntries(Object.entries(PRESETS).map(([k, p]) => [k, p.label]));
   panel.appendChild(selectRow('preset', presetLabels, model.preset, (v) => model.setPreset(v)));
@@ -381,6 +388,27 @@ recBtn.onclick = () => {
   recBtn.classList.add('on');
   recBtn.setAttribute('aria-label', tr('rec.stop'));
 };
+
+// ---------------------------------------------------------------- UniverseChopLAb
+
+let lab = null;
+function openLab() {
+  if (state.mode !== 'video' || !state.tf) return;
+  if (!lab) {
+    lab = new UniverseLab($('lab'), { t: tr });
+    lab.onClose = () => {
+      viewer.paused = false;
+      recorder.source = viewer.canvas;
+      recorder.stop();
+    };
+  }
+  viewer.paused = true;
+  recorder.stop();
+  lab.open(state.tf, { far: state.timeParams.far, duration: state.clip.duration, c: model.c, t0: model.t0 });
+  recorder.source = lab.canvas;
+  lab.afterRender = () => recorder.capture();
+}
+onLangChange(() => { if (lab && lab.active) lab._labels(); });
 
 let hudClock = 0;
 
@@ -668,6 +696,7 @@ function rebuild() {
     if (state.mode === 'video') {
       const tf = buildTimeField(state.clip, state.timeParams);
       const buildMs = performance.now() - t0;
+      state.tf = tf;
       viewer.setTimeField(tf, makeWorld(tf));
       viewer.setRenderMode(state.surface);
       model.setDepthStats(tf.depthStats, model.depthStats ? undefined : defaultPace());
@@ -915,4 +944,4 @@ const src = new URLSearchParams(location.search).get('src');
 if (src) loadMedia(src);
 
 // exposed for tinkering from the devtools console
-window.atom = { viewer, state, rebuild, model, observer, estimateDepth, recorder };
+window.atom = { viewer, state, rebuild, model, observer, estimateDepth, recorder, openLab, get lab() { return lab; } };

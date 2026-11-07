@@ -123,6 +123,32 @@
     </div>
   </main>
 
+  <!-- UniverseChopLAb: the clip as a block universe, full screen -->
+  <section id="lab" class="hidden" aria-label="UniverseChopLAb">
+    <canvas id="lab-canvas"></canvas>
+    <header class="lab-head">
+      <div>
+        <h2 class="lab-title">UniverseChopLAb</h2>
+        <p class="lab-sub" data-i18n="lab.sub"></p>
+      </div>
+      <button id="lab-close" class="lab-btn" type="button" data-i18n="lab.close"></button>
+    </header>
+    <div class="lab-legend">
+      <p><i class="lab-dot star"></i><span data-i18n="lab.legend.static"></span></p>
+      <p><i class="lab-dot earth"></i><span data-i18n="lab.legend.actors"></span></p>
+      <p><i class="lab-dot slice"></i><span data-i18n="lab.legend.slice"></span></p>
+    </div>
+    <footer class="lab-foot">
+      <p id="lab-readout"></p>
+      <p id="lab-hint"></p>
+      <div class="lab-controls">
+        <label class="lab-toggle"><input id="lab-play" type="checkbox" /><span data-i18n="lab.play"></span></label>
+        <div id="lab-stick" aria-label="now / speed"><span class="lab-ring"></span><span id="lab-knob"></span></div>
+        <button id="lab-dive" class="lab-btn" type="button" data-i18n="lab.dive"></button>
+      </div>
+    </footer>
+  </section>
+
   <script type="module" src="src/main.js"></script>
 </body>
 </html>
