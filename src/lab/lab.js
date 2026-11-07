@@ -1,52 +1,118 @@
 // UniverseChopLAb: an immersive block universe made of the uploaded clip (see labdata.js).
 //
-//   block view   the whole history floats in space. The "now" slice cuts through it; push the stick
-//                up or down to move now through time, sideways to move fast (the slice tilts by
-//                Lorentz: t = T0 + beta x / c). Where the slice cuts the worldtubes, the actors light up.
-//   inside       you stand on the slice at the capture point, at human scale: the static world and
-//                the actors of now around you, the future stacked overhead, the past under your feet.
-//                Turn the phone (or drag) to look; the stick still moves now and tilts it.
+//   rise above      the clockwork universe. The whole history floats in space and time runs on its
+//                   own, like a clock outside the universe (switchable). The stick scrubs now up and
+//                   down and, sideways, sets a speed that tilts the slice: t = T0 + beta x / c.
+//   step onto now   proper time. You stand on the slice at human scale and the stick walks you through
+//                   the scene. Each second you live moves the clip on by gamma seconds, and the speed
+//                   you walk at tilts your now. Up is the future, down the past.
+//
+// Everything is a real pixel at a real moment: the slice is the actual frame (picked per pixel by the
+// tilted now, on the GPU), the still world is a column of its own colours through time, and the
+// movers away from now hang as ghosts along their worldtubes.
 
 import * as THREE from 'three';
 import { buildLabData, RELIEF } from './labdata.js';
 import { Stick } from '../stick.js';
 import { MotionWalker, motionSupported, requestMotionPermission } from '../motion.js';
 
-const ACTOR_VERT = /* glsl */ `
+// shared: the time of the slice at a point, for an observer at uObs moving with uBeta (units of c)
+const SLICE_TIME = /* glsl */ `
+uniform float uT0;
+uniform float uC;
+uniform vec2 uBeta;
+uniform vec2 uObs;
+float sliceTime(vec3 q) {
+  return uT0 + (uBeta.x * (q.x - uObs.x) + uBeta.y * (q.z - uObs.y)) / uC;
+}
+`;
+
+const SLICE_VERT = /* glsl */ `
+precision highp sampler2DArray;
+uniform sampler2DArray uDepth;
+uniform sampler2DArray uColor;
+uniform vec2 uGrid;
+uniform float uFocal;
+uniform float uFrames;
+uniform float uDt;
+uniform float uK;
+uniform float uRelief;
+uniform float uPx;
+uniform float uStride;
+uniform float uSky;
+uniform float uInside;
+${SLICE_TIME}
+varying vec3 vCol;
+varying float vA;
+
+vec3 pointAt(ivec2 p, float z) {
+  vec2 r = vec2((float(p.x) + 0.5 - uGrid.x * 0.5) / uFocal, -(float(p.y) + 0.5 - uGrid.y * 0.5) / uFocal);
+  return vec3(r.x * z, r.y * z, -z);
+}
+
+void main() {
+  ivec2 p = ivec2(position.xy);
+  float fmax = uFrames - 1.0;
+  float f = clamp(uT0 / uDt, 0.0, fmax);
+  float z = texelFetch(uDepth, ivec3(p, int(floor(f + 0.5))), 0).r;
+  // where the point is depends on the moment it shows, so settle it twice
+  for (int i = 0; i < 2; i++) {
+    f = clamp(sliceTime(pointAt(p, z)) / uDt, 0.0, fmax);
+    z = texelFetch(uDepth, ivec3(p, int(floor(f + 0.5))), 0).r;
+  }
+  int i0 = int(floor(f));
+  int i1 = min(i0 + 1, int(fmax));
+  vCol = mix(texelFetch(uColor, ivec3(p, i0), 0).rgb, texelFetch(uColor, ivec3(p, i1), 0).rgb, smoothstep(0.15, 0.85, f - floor(f)));
+  vec3 q = pointAt(p, z);
+  // above, the slice sits at its moment in the block; standing on it, your now is flat around you
+  // and the tilt only decides which moment each place shows
+  float h = mix(f * uDt, uT0, uInside);
+  vec3 pos = vec3(q.x, h * uK + q.y * uRelief, q.z);
+  vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  gl_Position = projectionMatrix * mv;
+  vA = 1.0;
+  float spacing = max(z, 0.5) / uFocal * uStride * 1.5;
+  gl_PointSize = clamp(uPx * spacing / max(-mv.z, 0.05), 1.0, 28.0);
+  if (z >= uSky || -mv.z < 0.05) { gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
+}
+`;
+
+// history away from now: the movers' ghosts and the still world's columns
+const HISTORY_VERT = /* glsl */ `
 attribute vec3 aColor;
 attribute float aTime;
 uniform float uK;
-uniform float uT0;
-uniform float uBeta;
-uniform float uC;
 uniform float uRelief;
 uniform float uSigma;
 uniform float uDur;
 uniform float uPx;
 uniform float uFocal;
 uniform float uStride;
-uniform float uGhostA;
+uniform float uBaseA;
 uniform float uInside;
+uniform float uWarm;
+${SLICE_TIME}
 varying vec3 vCol;
 varying float vA;
 void main() {
-  float tSlice = uT0 + uBeta * position.x / uC;
-  float d = aTime - tSlice;
+  float d = aTime - sliceTime(position);
+  // the slice itself shows this moment for real, so the history steps aside there
   float on = exp(-(d * d) / (uSigma * uSigma));
-  vec3 p = vec3(position.x, aTime * uK + position.y * uRelief, position.z);
+  // inside, the past and future stack below and above your own now, not the block's
+  float h = mix(aTime, uT0 + d, uInside);
+  vec3 p = vec3(position.x, h * uK + position.y * uRelief, position.z);
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;
-  // the past glows warm, the future cool, as in the photo's time tint
+  // the past glows warm, the future cool
   float ahead = clamp(d / (uDur * 0.3), -1.0, 1.0);
-  vec3 tint = ahead > 0.0 ? vec3(0.55, 0.78, 1.3) : vec3(1.3, 0.82, 0.55);
+  vec3 tint = ahead > 0.0 ? vec3(0.6, 0.8, 1.25) : vec3(1.25, 0.85, 0.6);
   float lum = dot(aColor, vec3(0.3, 0.59, 0.11));
-  vec3 ghost = mix(aColor, vec3(lum) * tint, 0.75);
-  vCol = mix(ghost, aColor * mix(1.15, 0.7, uInside), on);
-  // inside, far moments fade so the stack around you stays readable
-  float keep = mix(1.0, exp(-abs(d) / (uDur * 0.1)), uInside);
-  vA = mix(uGhostA * keep, 1.0, on);
-  float spacing = max(-position.z, 0.5) / uFocal * uStride * 1.7;
-  gl_PointSize = clamp(uPx * spacing * mix(0.8, 1.25, on) / max(-mv.z, 0.05), 1.0, 24.0);
+  vCol = mix(aColor, vec3(lum) * tint, uWarm);
+  float keep = mix(1.0, exp(-abs(d) / (uDur * 0.12)), uInside);
+  vA = uBaseA * keep * (1.0 - on);
+  float spacing = max(-position.z, 0.5) / uFocal * uStride * 1.6;
+  gl_PointSize = clamp(uPx * spacing * mix(1.0, 0.55, uInside) / max(-mv.z, 0.05), 1.0, mix(20.0, 9.0, uInside));
+  if (vA < 0.004 || -mv.z < 0.05) { gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
 }
 `;
 
@@ -57,69 +123,12 @@ void main() {
   vec2 c = gl_PointCoord - 0.5;
   float r = dot(c, c);
   if (r > 0.25) discard;
-  float a = vA * smoothstep(0.25, 0.05, r);
-  gl_FragColor = vec4(vCol, a);
+  gl_FragColor = vec4(vCol, vA * smoothstep(0.25, 0.05, r));
 }
-`;
-
-// the static world rides on the slice: the "now" of everything that stays put
-const FLOOR_VERT = /* glsl */ `
-attribute vec3 aColor;
-uniform float uK;
-uniform float uT0;
-uniform float uBeta;
-uniform float uC;
-uniform float uRelief;
-uniform float uPx;
-uniform float uFocal;
-uniform float uFloorA;
-varying vec3 vCol;
-varying float vA;
-void main() {
-  float t = uT0 + uBeta * position.x / uC;
-  vec3 p = vec3(position.x, t * uK + position.y * uRelief, position.z);
-  vec4 mv = modelViewMatrix * vec4(p, 1.0);
-  gl_Position = projectionMatrix * mv;
-  vCol = aColor;
-  vA = uFloorA;
-  float spacing = max(-position.z, 0.5) / uFocal * 2.0 * 1.6;
-  gl_PointSize = clamp(uPx * spacing / max(-mv.z, 0.05), 1.0, 20.0);
-}
-`;
-
-// straight worldlines of the static world; they glow amber where the slice crosses them
-const LINE_VERT = /* glsl */ `
-attribute vec4 aColor;
-attribute float aW;
-uniform float uK;
-uniform float uDur;
-uniform float uRelief;
-uniform float uT0;
-uniform float uBeta;
-uniform float uC;
-uniform float uSigma;
-uniform float uLineA;
-varying vec3 vCol;
-varying float vA;
-void main() {
-  float t = aW * uDur;
-  vec3 p = vec3(position.x, t * uK + position.y * uRelief, position.z);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
-  float tSlice = uT0 + uBeta * position.x / uC;
-  float glow = exp(-pow((t - tSlice) / (uSigma * 2.5), 2.0));
-  vec3 star = vec3(1.0, 0.72, 0.32);
-  vCol = mix(mix(aColor.rgb, star, 0.55), star, glow);
-  vA = (aColor.a * uLineA) * (1.0 + 4.0 * glow);
-}
-`;
-
-const LINE_FRAG = /* glsl */ `
-varying vec3 vCol;
-varying float vA;
-void main() { gl_FragColor = vec4(vCol, vA); }
 `;
 
 const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const MAX_BETA = 0.75;
 
 export class UniverseLab {
   constructor(root, { t }) {
@@ -133,22 +142,28 @@ export class UniverseLab {
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.05, 2000);
     this.active = false;
     this.afterRender = null;
+    this.onRec = null;          // set by main.js: toggles recording
+    this.recStatus = null;      // set by main.js: seconds recorded, or null
     this.objects = [];
+    this.textures = [];
+    this.coarse = matchMedia('(pointer: coarse)').matches;
 
     this.u = {
-      uK: { value: 1 }, uT0: { value: 0 }, uBeta: { value: 0 }, uC: { value: 2 },
+      uK: { value: 1 }, uT0: { value: 0 }, uC: { value: 2 },
+      uBeta: { value: new THREE.Vector2() }, uObs: { value: new THREE.Vector2() },
       uRelief: { value: RELIEF }, uSigma: { value: 0.2 }, uDur: { value: 1 },
-      uPx: { value: 500 }, uFocal: { value: 400 }, uStride: { value: 1 },
-      uGhostA: { value: 0.14 }, uInside: { value: 0 }, uFloorA: { value: 0.9 }, uLineA: { value: 0.12 },
+      uPx: { value: 500 }, uFocal: { value: 400 }, uInside: { value: 0 },
+      uDepth: { value: null }, uColor: { value: null }, uGrid: { value: new THREE.Vector2(1, 1) },
+      uFrames: { value: 1 }, uDt: { value: 1 }, uSky: { value: 22 },
     };
 
-    // state
     this.t0 = 0;
-    this.beta = 0;
-    this.betaTarget = 0;
-    this.play = false;
-    this.inside = 0;          // 0 block view .. 1 standing on the slice
+    this.beta = new THREE.Vector2();
+    this.clockOn = true;        // clockwork universe: time runs by itself
+    this.inside = 0;            // 0 above .. 1 standing on now
     this.insideTarget = 0;
+    this.obs = new THREE.Vector2();   // where you stand inside (x, z)
+    this.tau = 0;               // your proper time inside
     this.orbit = { az: 0.75, el: 0.32, dist: 40 };
     this.look = { yaw: 0, pitch: 0 };
     this.stickV = { x: 0, y: 0 };
@@ -179,11 +194,13 @@ export class UniverseLab {
     const $ = (id) => this.root.querySelector(id);
     this.readout = $('#lab-readout');
     this.hint = $('#lab-hint');
+    this.mode = $('#lab-mode');
     this.diveBtn = $('#lab-dive');
+    this.recBtn = $('#lab-rec');
+    this.recBtn.onclick = () => this.onRec && this.onRec();
     $('#lab-close').onclick = () => this.close();
-    const play = $('#lab-play');
-    play.onchange = () => { this.play = play.checked; };
-    this.playInput = play;
+    this.playInput = $('#lab-play');
+    this.playInput.onchange = () => { this.clockOn = this.playInput.checked; };
     this.diveBtn.onclick = async () => {
       const goingIn = this.insideTarget < 0.5;
       if (goingIn && motionSupported()) {
@@ -193,6 +210,7 @@ export class UniverseLab {
         if (ok) this.motion.start();
       }
       if (!goingIn) this.motion.stop();
+      if (goingIn) { this.obs.set(0, 0); this.tau = 0; this.beta.set(0, 0); }
       this.insideTarget = goingIn ? 1 : 0;
       this.look.yaw = 0; this.look.pitch = 0;
       this._labels();
@@ -202,9 +220,12 @@ export class UniverseLab {
 
   _labels() {
     const t = this.t;
-    this.diveBtn.textContent = t(this.insideTarget > 0.5 ? 'lab.rise' : 'lab.dive');
-    const touch = matchMedia('(pointer: coarse)').matches;
-    this.hint.textContent = t(this.insideTarget > 0.5 ? (touch ? 'lab.hint.inside.touch' : 'lab.hint.inside') : (touch ? 'lab.hint.block.touch' : 'lab.hint.block'));
+    const inside = this.insideTarget > 0.5;
+    this.diveBtn.textContent = t(inside ? 'lab.rise' : 'lab.dive');
+    this.mode.textContent = t(inside ? 'lab.mode.proper' : 'lab.mode.clock');
+    const touch = this.coarse;
+    this.hint.textContent = t(inside ? (touch ? 'lab.hint.inside.touch' : 'lab.hint.inside') : (touch ? 'lab.hint.block.touch' : 'lab.hint.block'));
+    this.root.querySelector('.lab-toggle').classList.toggle('hidden', inside);
   }
 
   _bindInput() {
@@ -256,46 +277,82 @@ export class UniverseLab {
     window.addEventListener('keyup', (e) => { this.keys.delete(e.code); }, true);
   }
 
-  // tf: the time field; opts: { far, duration, c, fps }
+  _uploadFrames(tf) {
+    const { width: W, height: H, frames: F } = tf;
+    const depth = new THREE.DataArrayTexture(tf.depth, W, H, F);
+    depth.format = THREE.RedFormat;
+    depth.type = THREE.FloatType;
+    const color = new THREE.DataArrayTexture(tf.color, W, H, F);
+    color.format = THREE.RGBAFormat;
+    for (const tex of [depth, color]) {
+      tex.minFilter = tex.magFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
+      tex.unpackAlignment = 1;
+      tex.needsUpdate = true;
+    }
+    this.textures.push(depth, color);
+    this.u.uDepth.value = depth;
+    this.u.uColor.value = color;
+    this.u.uGrid.value.set(W, H);
+    this.u.uFrames.value = F;
+  }
+
+  // tf: the time field; opts: { far, duration, c, t0 }
   open(tf, opts) {
     this._dispose();
-    const data = buildLabData(tf, opts);
+    const data = buildLabData(tf, { ...opts, coarse: this.coarse });
     const b = data.bounds;
     this.bounds = b;
     const u = this.u;
-    u.uK.value = b.k;
     this.k = b.k;
+    u.uK.value = b.k;
     u.uDur.value = b.duration;
+    u.uDt.value = b.dt;
     u.uC.value = opts.c || 2;
     u.uFocal.value = tf.focal;
-    u.uStride.value = data.actors.stride;
+    u.uSky.value = (opts.far || 25) * 0.9;
     u.uSigma.value = Math.max(b.dt * 0.75, 0.05);
+    this._uploadFrames(tf);
     this.t0 = opts.t0 ?? b.duration / 2;
-    this.beta = this.betaTarget = 0;
+    this.beta.set(0, 0);
+    this.obs.set(0, 0);
     this.inside = this.insideTarget = 0;
     this.motion.stop();
+    this.clockOn = true;
 
+    // the now slice: the real frame, one point per (sampled) pixel
+    const W = tf.width, H = tf.height;
+    const ss = this.coarse || W * H > 200000 ? 2 : 1;
+    const grid = [];
+    for (let y = 0; y < H; y += ss) for (let x = 0; x < W; x += ss) grid.push(x, y, 0);
+    const sliceGeo = new THREE.BufferGeometry();
+    sliceGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(grid), 3));
+    this._add(new THREE.Points(sliceGeo, new THREE.ShaderMaterial({
+      uniforms: { ...u, uStride: { value: ss } }, vertexShader: SLICE_VERT, fragmentShader: POINT_FRAG,
+    })));
+
+    const additive = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending };
+    // the still world's columns: its own colours through time (the stars' worldlines)
+    const cols = new THREE.BufferGeometry();
+    cols.setAttribute('position', new THREE.BufferAttribute(data.columns.positions, 3));
+    cols.setAttribute('aColor', new THREE.BufferAttribute(data.columns.colors, 3, true));
+    cols.setAttribute('aTime', new THREE.BufferAttribute(data.columns.times, 1));
+    this.colMat = new THREE.ShaderMaterial({
+      uniforms: { ...u, uStride: { value: data.columns.stride }, uBaseA: { value: 0.06 }, uWarm: { value: 0.3 } },
+      vertexShader: HISTORY_VERT, fragmentShader: POINT_FRAG, ...additive,
+    });
+    this._add(new THREE.Points(cols, this.colMat));
+
+    // the movers' ghosts along their worldtubes
     const actors = new THREE.BufferGeometry();
     actors.setAttribute('position', new THREE.BufferAttribute(data.actors.positions, 3));
     actors.setAttribute('aColor', new THREE.BufferAttribute(data.actors.colors, 3, true));
     actors.setAttribute('aTime', new THREE.BufferAttribute(data.actors.times, 1));
-    const additive = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending };
-    this._add(new THREE.Points(actors, new THREE.ShaderMaterial({ uniforms: u, vertexShader: ACTOR_VERT, fragmentShader: POINT_FRAG, ...additive })));
-
-    const floor = new THREE.BufferGeometry();
-    floor.setAttribute('position', new THREE.BufferAttribute(data.floor.positions, 3));
-    floor.setAttribute('aColor', new THREE.BufferAttribute(data.floor.colors, 3, true));
-    this._add(new THREE.Points(floor, new THREE.ShaderMaterial({ uniforms: u, vertexShader: FLOOR_VERT, fragmentShader: POINT_FRAG, transparent: true, depthWrite: false })));
-
-    const lines = new THREE.BufferGeometry();
-    // the line data is (x, y, z, w) with w = 0 at the start of time and 1 at the end
-    const lp = data.lines.positions, nl = lp.length / 4;
-    const lxyz = new Float32Array(nl * 3), lw = new Float32Array(nl);
-    for (let i = 0; i < nl; i++) { lxyz[i * 3] = lp[i * 4]; lxyz[i * 3 + 1] = lp[i * 4 + 1]; lxyz[i * 3 + 2] = lp[i * 4 + 2]; lw[i] = lp[i * 4 + 3]; }
-    lines.setAttribute('position', new THREE.BufferAttribute(lxyz, 3));
-    lines.setAttribute('aW', new THREE.BufferAttribute(lw, 1));
-    lines.setAttribute('aColor', new THREE.BufferAttribute(data.lines.colors, 4, true));
-    this._add(new THREE.LineSegments(lines, new THREE.ShaderMaterial({ uniforms: u, vertexShader: LINE_VERT, fragmentShader: LINE_FRAG, ...additive })));
+    this.actorMat = new THREE.ShaderMaterial({
+      uniforms: { ...u, uStride: { value: data.actors.stride }, uBaseA: { value: 0.16 }, uWarm: { value: 0.75 } },
+      vertexShader: HISTORY_VERT, fragmentShader: POINT_FRAG, ...additive,
+    });
+    this._add(new THREE.Points(actors, this.actorMat));
 
     // the block's outline and the grid of the first moment
     const w = b.maxX - b.minX, d = b.maxZ - b.minZ;
@@ -307,33 +364,32 @@ export class UniverseLab {
     box.position.set(this.center.x, b.height / 2, this.center.z);
     this.box = box;
     this._add(box);
-    const grid = new THREE.GridHelper(Math.max(w, d), 16, 0x1d2840, 0x141c2e);
-    grid.position.set(this.center.x, 0, this.center.z);
-    grid.material.transparent = true;
-    grid.material.opacity = 0.7;
-    this.grid = grid;
-    this._add(grid);
+    const gridHelper = new THREE.GridHelper(Math.max(w, d), 16, 0x1d2840, 0x141c2e);
+    gridHelper.position.set(this.center.x, 0, this.center.z);
+    gridHelper.material.transparent = true;
+    gridHelper.material.opacity = 0.7;
+    this.grid = gridHelper;
+    this._add(gridHelper);
 
-    // the now slice
-    const sliceGeo = new THREE.PlaneGeometry(w * 1.12, d * 1.12).rotateX(-Math.PI / 2);
-    const slice = new THREE.Mesh(sliceGeo, new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false }));
-    slice.add(new THREE.LineSegments(new THREE.EdgesGeometry(sliceGeo), new THREE.LineBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.8 })));
-    this.slice = slice;
-    this._add(slice);
+    // the outline of now
+    const planeGeo = new THREE.PlaneGeometry(w * 1.12, d * 1.12).rotateX(-Math.PI / 2);
+    const plane = new THREE.Mesh(planeGeo, new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false }));
+    plane.add(new THREE.LineSegments(new THREE.EdgesGeometry(planeGeo), new THREE.LineBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.8 })));
+    this.plane = plane;
+    this._add(plane);
 
     const span = Math.max(w, d, b.height);
+    this.span = span;
     this.minDist = span * 0.35;
     this.maxDist = span * 4;
-    this.span = span;
 
     this.active = true;
     this.root.classList.remove('hidden');
-    this.playInput.checked = this.play = false;
+    this.playInput.checked = true;
     this._labels();
     this._resize();
     // a tall phone screen sees less across, so start further back
-    this.orbit = { az: 0.75, el: 0.32, dist: span * 1.9 * Math.max(1, 0.9 / this.camera.aspect) };
-    this.orbit.dist = Math.min(this.orbit.dist, this.maxDist);
+    this.orbit = { az: 0.75, el: 0.32, dist: Math.min(span * 1.9 * Math.max(1, 0.9 / this.camera.aspect), this.maxDist) };
     this.clock = new THREE.Timer();
     this.renderer.setAnimationLoop(() => this._frame());
     return data;
@@ -360,7 +416,9 @@ export class UniverseLab {
       this.scene.remove(o);
       o.traverse((c) => { c.geometry?.dispose(); c.material?.dispose(); });
     }
+    for (const tex of this.textures) tex.dispose();
     this.objects = [];
+    this.textures = [];
   }
 
   _resize() {
@@ -372,26 +430,52 @@ export class UniverseLab {
     this.u.uPx.value = (this.camera.projectionMatrix.elements[5] * buf.y) / 2;
   }
 
+  _wrap(t) {
+    const d = this.bounds.duration;
+    return ((t % d) + d) % d;
+  }
+
   _frame() {
     this.clock.update();
     const dt = Math.min(this.clock.getDelta(), 0.05);
     const b = this.bounds, u = this.u;
+    const c = u.uC.value;
 
-    // inputs: the stick (or keys) moves now through time and sets the speed
     const k = this.keys;
     const ky = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0);
     const kx = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0);
     const sy = this.stickV.y || ky, sx = this.stickV.x || kx;
-    this.t0 += sy * dt * (b.duration / 4);
-    if (this.play) this.t0 += dt;
-    if (this.t0 > b.duration) this.t0 = this.play ? 0 : b.duration;
-    if (this.t0 < 0) this.t0 = 0;
-    this.betaTarget = THREE.MathUtils.clamp(sx, -1, 1) * 0.75;
-    this.beta += (this.betaTarget - this.beta) * (1 - Math.exp(-dt / 0.25));
-    u.uT0.value = this.t0;
-    u.uBeta.value = this.beta;
 
-    // block view <-> standing on the slice
+    let gamma = 1;
+    if (this.insideTarget > 0.5) {
+      // proper time: the stick walks you through space, relative to where you look
+      const yaw = this.camYaw ?? 0;
+      const fwd = new THREE.Vector2(-Math.sin(yaw), -Math.cos(yaw));
+      const right = new THREE.Vector2(Math.cos(yaw), -Math.sin(yaw));
+      const want = fwd.multiplyScalar(sy).add(right.multiplyScalar(sx));
+      if (want.length() > 1) want.normalize();
+      want.multiplyScalar(MAX_BETA);
+      this.beta.lerp(want, 1 - Math.exp(-dt / 0.3));
+      this.obs.addScaledVector(this.beta, c * dt);
+      this.obs.x = THREE.MathUtils.clamp(this.obs.x, b.minX, b.maxX);
+      this.obs.y = THREE.MathUtils.clamp(this.obs.y, b.minZ, b.maxZ);
+      gamma = 1 / Math.sqrt(1 - Math.min(this.beta.lengthSq(), 0.99));
+      // one second of your life is gamma seconds of the clip's own time
+      this.tau += dt;
+      this.t0 = this._wrap(this.t0 + gamma * dt);
+    } else {
+      // clockwork universe: a clock outside runs now on; the stick scrubs it and sets a speed along x
+      this.t0 += sy * dt * (b.duration / 4);
+      if (this.clockOn) this.t0 += dt;
+      this.t0 = this.clockOn ? this._wrap(this.t0) : THREE.MathUtils.clamp(this.t0, 0, b.duration);
+      this.beta.lerp(new THREE.Vector2(THREE.MathUtils.clamp(sx, -1, 1) * MAX_BETA, 0), 1 - Math.exp(-dt / 0.25));
+      this.obs.lerp(new THREE.Vector2(0, 0), 1 - Math.exp(-dt / 0.5));
+    }
+    u.uT0.value = this.t0;
+    u.uBeta.value.copy(this.beta);
+    u.uObs.value.copy(this.obs);
+
+    // above <-> on now
     const step = dt / 1.6;
     this.inside = this.insideTarget > this.inside ? Math.min(this.insideTarget, this.inside + step) : Math.max(this.insideTarget, this.inside - step);
     const m = ease(this.inside);
@@ -399,20 +483,21 @@ export class UniverseLab {
     this.root.classList.toggle('inside', m > 0.5);
     u.uRelief.value = RELIEF + (1 - RELIEF) * m;
     u.uK.value = this.k * (1 + 1.5 * m);
-    u.uGhostA.value = 0.14 + 0.06 * m;
-    u.uLineA.value = 0.16 * (1 - 0.6 * m);
+    this.colMat.uniforms.uBaseA.value = 0.06 - 0.035 * m;
+    this.actorMat.uniforms.uBaseA.value = 0.16 - 0.06 * m;
     this.box.material.opacity = 0.55 * (1 - m);
     this.grid.material.opacity = 0.7 * (1 - m);
-
-    // the slice: height k (T0 + beta x / c), tilted along x
-    const kk = u.uK.value;
-    this.slice.position.set(this.center.x, kk * (this.t0 + (this.beta * this.center.x) / u.uC.value), this.center.z);
-    this.slice.rotation.set(0, 0, Math.atan((kk * this.beta) / u.uC.value));
-    this.slice.material.opacity = 0.08 * (1 - 0.7 * m);
     this.box.scale.y = 1 + 1.5 * m;
     this.box.position.y = (b.height * (1 + 1.5 * m)) / 2;
 
-    // camera: orbit around the block, or stand at the capture point on the slice
+    // the outline of now: height k * sliceTime, tilted along the velocity
+    const kk = u.uK.value;
+    const tCenter = this.t0 + (this.beta.x * (this.center.x - this.obs.x) + this.beta.y * (this.center.z - this.obs.y)) / c;
+    this.plane.position.set(this.center.x, kk * tCenter, this.center.z);
+    this.plane.rotation.set(-Math.atan((kk * this.beta.y) / c), 0, Math.atan((kk * this.beta.x) / c), 'XYZ');
+    this.plane.visible = m < 0.98;
+
+    // camera: orbit the block, or stand at your place on now
     const o = this.orbit;
     const target = new THREE.Vector3(this.center.x, b.height * 0.5, this.center.z);
     const orbitPos = new THREE.Vector3(
@@ -421,22 +506,30 @@ export class UniverseLab {
       target.z + o.dist * Math.cos(o.el) * Math.cos(o.az),
     );
     const orbitQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(orbitPos, target, new THREE.Vector3(0, 1, 0)));
-    const insidePos = new THREE.Vector3(0, kk * this.t0, 0);
+    const insidePos = new THREE.Vector3(this.obs.x, kk * this.t0, this.obs.y);
     let insideQ;
     if (this.motion.active) {
-      const step2 = this.motion.update(dt);
-      insideQ = step2.ready ? step2.quat.clone() : new THREE.Quaternion();
+      const s = this.motion.update(dt);
+      insideQ = s.ready ? s.quat.clone() : new THREE.Quaternion();
     } else {
       insideQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.look.pitch, this.look.yaw, 0, 'YXZ'));
     }
+    const f = new THREE.Vector3(0, 0, -1).applyQuaternion(insideQ);
+    this.camYaw = Math.atan2(-f.x, -f.z);
     this.camera.position.lerpVectors(orbitPos, insidePos, m);
     this.camera.quaternion.slerpQuaternions(orbitQ, insideQ, m);
     this.stars.position.copy(this.camera.position);
 
-    this.readout.textContent = this.t('lab.readout', {
-      t: this.t0.toFixed(1), d: b.duration.toFixed(1), b: this.beta.toFixed(2),
-      s: (Math.abs(this.beta) * Math.max(Math.abs(b.minX), Math.abs(b.maxX)) / u.uC.value).toFixed(1),
-    });
+    const speed = this.beta.length();
+    this.readout.textContent = this.insideTarget > 0.5
+      ? this.t('lab.readout.inside', { tau: this.tau.toFixed(1), t: this.t0.toFixed(1), d: b.duration.toFixed(1), b: speed.toFixed(2), g: gamma.toFixed(2) })
+      : this.t('lab.readout', {
+        t: this.t0.toFixed(1), d: b.duration.toFixed(1), b: this.beta.x.toFixed(2),
+        s: (Math.abs(this.beta.x) * Math.max(Math.abs(b.minX), Math.abs(b.maxX)) / c).toFixed(1),
+      });
+    const rec = this.recStatus ? this.recStatus() : null;
+    this.recBtn.classList.toggle('on', rec !== null);
+    this.recBtn.textContent = rec !== null ? `● ${Math.floor(rec / 60)}:${String(Math.floor(rec % 60)).padStart(2, '0')}` : '●';
 
     this.renderer.render(this.scene, this.camera);
     if (this.afterRender) this.afterRender();
