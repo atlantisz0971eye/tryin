@@ -407,6 +407,8 @@ function openLab() {
   lab.open(state.tf, { far: state.timeParams.far, duration: state.clip.duration, c: model.c, t0: model.t0 });
   recorder.source = lab.canvas;
   lab.afterRender = () => recorder.capture();
+  lab.onRec = () => recBtn.onclick();
+  lab.recStatus = () => (recorder.active ? (performance.now() - recorder.startedAt) / 1000 : null);
 }
 onLangChange(() => { if (lab && lab.active) lab._labels(); });
 

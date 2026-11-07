@@ -701,6 +701,10 @@ h1 {
   pointer-events: none;
 }
 .lab-title { margin: 0; font: 600 clamp(24px, 4.6vmin, 38px)/1 var(--hand); letter-spacing: 0.02em; color: #f2f6ff; }
+#lab-mode { margin: 8px 0 0; font: 600 clamp(15px, 2.5vmin, 19px)/1.2 var(--hand); color: #ffcf8a; letter-spacing: 0.02em; }
+.lab-actions { display: flex; gap: 8px; pointer-events: auto; }
+#lab-rec { min-width: 44px; color: #f3d6d3; }
+#lab-rec.on { border-color: #e0574f; color: #ff8b84; }
 .lab-sub { margin: 6px 0 0; max-width: 34ch; font: clamp(14px, 2.4vmin, 18px)/1.25 var(--hand); color: #8fa0bf; }
 .lab-btn {
   pointer-events: auto;
@@ -716,7 +720,7 @@ h1 {
 .lab-btn:hover { border-color: rgba(125, 211, 252, 0.8); }
 .lab-legend {
   position: absolute;
-  top: calc(max(16px, env(safe-area-inset-top)) + clamp(78px, 13vmin, 110px));
+  top: calc(max(16px, env(safe-area-inset-top)) + clamp(104px, 17vmin, 140px));
   left: max(18px, env(safe-area-inset-left));
   font: clamp(13px, 2.1vmin, 16px)/1.5 var(--hand);
   color: #9aa9c6;
