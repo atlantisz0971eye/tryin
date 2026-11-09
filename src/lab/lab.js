@@ -5,7 +5,8 @@
 //                   down and, sideways, sets a speed that tilts the slice: t = T0 + beta x / c.
 //   step onto now   proper time. You stand on the slice at human scale and the stick walks you through
 //                   the scene. Each second you live moves the clip on by gamma seconds, and the speed
-//                   you walk at tilts your now. Up is the future, down the past.
+//                   you walk at tilts your now. Above and below hang the other yous: a random seed
+//                   makes each walk its own way, with its own now and its own clock.
 //
 // Everything is a real pixel at a real moment: the slice is the actual frame (picked per pixel by the
 // tilted now, on the GPU), the still world is a column of its own colours through time, and the
@@ -41,6 +42,10 @@ uniform float uPx;
 uniform float uStride;
 uniform float uSky;
 uniform float uInside;
+uniform float uNow;
+uniform float uLift;
+uniform float uAlpha;
+uniform float uBack;
 ${SLICE_TIME}
 varying vec3 vCol;
 varying float vA;
@@ -66,19 +71,25 @@ void main() {
   vec3 q = pointAt(p, z);
   // above, the slice sits at its moment in the block; standing on it, your now is flat around you
   // and the tilt only decides which moment each place shows
-  float h = mix(f * uDt, uT0, uInside);
-  vec3 pos = vec3(q.x, h * uK + q.y * uRelief, q.z);
+  // (uNow is your own now; a layer of another possible you hangs uLift above or below it)
+  float h = mix(f * uDt, uNow, uInside);
+  vec3 pos = vec3(q.x, h * uK + q.y * uRelief + uLift, q.z);
   vec4 mv = modelViewMatrix * vec4(pos, 1.0);
   gl_Position = projectionMatrix * mv;
-  vA = 1.0;
+  // the other yous sit a hair behind, so they never draw over your own now where the two coincide
+  gl_Position.z += uBack * gl_Position.w;
+  // and they keep to the space overhead and underfoot: level with your eyes there is only your now
+  float steep = abs(normalize(pos - cameraPosition).y);
+  vA = uAlpha * mix(1.0, smoothstep(0.12, 0.42, steep), step(1e-6, uBack));
   float spacing = max(z, 0.5) / uFocal * uStride * 1.5;
   gl_PointSize = clamp(uPx * spacing / max(-mv.z, 0.05), 1.0, 28.0);
-  if (z >= uSky || -mv.z < 0.05) { gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
+  if (z >= uSky || -mv.z < 0.05 || vA < 0.01) { gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
 }
 `;
 
 // history away from now: the movers' ghosts and the still world's columns
 const HISTORY_VERT = /* glsl */ `
+precision highp sampler3D;
 attribute vec3 aColor;
 attribute float aTime;
 uniform float uK;
@@ -91,6 +102,10 @@ uniform float uStride;
 uniform float uBaseA;
 uniform float uInside;
 uniform float uWarm;
+uniform sampler3D uLit;
+uniform vec3 uLitMin;
+uniform vec3 uLitSize;
+uniform float uLitA;
 ${SLICE_TIME}
 varying vec3 vCol;
 varying float vA;
@@ -107,9 +122,11 @@ void main() {
   float ahead = clamp(d / (uDur * 0.3), -1.0, 1.0);
   vec3 tint = ahead > 0.0 ? vec3(0.6, 0.8, 1.25) : vec3(1.25, 0.85, 0.6);
   float lum = dot(aColor, vec3(0.3, 0.59, 0.11));
-  vCol = mix(aColor, vec3(lum) * tint, uWarm);
+  // what your moving now has swept keeps glowing in its own colours, wherever it is in the block
+  float lit = texture(uLit, (vec3(position.x, position.z, aTime) - uLitMin) / uLitSize).r;
+  vCol = mix(mix(aColor, vec3(lum) * tint, uWarm), aColor * 1.15, lit);
   float keep = mix(1.0, exp(-abs(d) / (uDur * 0.12)), uInside);
-  vA = uBaseA * keep * (1.0 - on);
+  vA = (uBaseA * keep + uLitA * lit) * (1.0 - on);
   float spacing = max(-position.z, 0.5) / uFocal * uStride * 1.6;
   gl_PointSize = clamp(uPx * spacing * mix(1.0, 0.55, uInside) / max(-mv.z, 0.05), 1.0, mix(20.0, 9.0, uInside));
   if (vA < 0.004 || -mv.z < 0.05) { gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
@@ -129,6 +146,25 @@ void main() {
 
 const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 const MAX_BETA = 0.75;
+// the glow your motion leaves in the block: how fast a swept place lights up, how slowly it fades,
+// and how far (as a share of the clip) your now must lean from the resting now to light at full
+const LIT_RISE = 0.35;
+const LIT_FADE = 9;
+const LIT_LEAN = 0.06;
+// the other yous stacked above and below when you stand on now. A random seed, drawn each time you
+// step in, gives every layer its own wandering difference from the way you walk, so each one's now
+// leans its own way and its clock runs on by its own amount: the stack is not ordered in time.
+const ALT_LAYERS = [-3, -2, -1, 1, 2, 3];
+const ALT_ALPHA = [0, 0.34, 0.2, 0.11];
+
+function mulberry32(a) {
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 export class UniverseLab {
   constructor(root, { t }) {
@@ -155,6 +191,8 @@ export class UniverseLab {
       uPx: { value: 500 }, uFocal: { value: 400 }, uInside: { value: 0 },
       uDepth: { value: null }, uColor: { value: null }, uGrid: { value: new THREE.Vector2(1, 1) },
       uFrames: { value: 1 }, uDt: { value: 1 }, uSky: { value: 22 },
+      uNow: { value: 0 }, uLift: { value: 0 }, uAlpha: { value: 1 }, uBack: { value: 0 },
+      uLit: { value: null }, uLitMin: { value: new THREE.Vector3() }, uLitSize: { value: new THREE.Vector3(1, 1, 1) },
     };
 
     this.t0 = 0;
@@ -164,6 +202,8 @@ export class UniverseLab {
     this.insideTarget = 0;
     this.obs = new THREE.Vector2();   // where you stand inside (x, z)
     this.tau = 0;               // your proper time inside
+    this.alts = [];             // the other yous: { j, t, beta, mesh, amp, w, ph }
+    this.seed = 0;              // what decides how the other yous walk
     this.orbit = { az: 0.75, el: 0.32, dist: 40 };
     this.look = { yaw: 0, pitch: 0 };
     this.stickV = { x: 0, y: 0 };
@@ -210,7 +250,10 @@ export class UniverseLab {
         if (ok) this.motion.start();
       }
       if (!goingIn) this.motion.stop();
-      if (goingIn) { this.obs.set(0, 0); this.tau = 0; this.beta.set(0, 0); }
+      if (goingIn) {
+        this.obs.set(0, 0); this.tau = 0; this.beta.set(0, 0);
+        this._seedAlts((Math.random() * 4294967296) >>> 0);
+      }
       this.insideTarget = goingIn ? 1 : 0;
       this.look.yaw = 0; this.look.pitch = 0;
       this._labels();
@@ -222,7 +265,7 @@ export class UniverseLab {
     const t = this.t;
     const inside = this.insideTarget > 0.5;
     this.diveBtn.textContent = t(inside ? 'lab.rise' : 'lab.dive');
-    this.mode.textContent = t(inside ? 'lab.mode.proper' : 'lab.mode.clock');
+    this.mode.textContent = t(inside ? 'lab.mode.proper' : 'lab.mode.clock') + (inside ? ` · seed ${this.seed.toString(16).padStart(8, '0')}` : '');
     const touch = this.coarse;
     this.hint.textContent = t(inside ? (touch ? 'lab.hint.inside.touch' : 'lab.hint.inside') : (touch ? 'lab.hint.block.touch' : 'lab.hint.block'));
     this.root.querySelector('.lab-toggle').classList.toggle('hidden', inside);
@@ -297,6 +340,67 @@ export class UniverseLab {
     this.u.uFrames.value = F;
   }
 
+  // The same seed always gives the same other yous. Each gets a strength and, for either direction on
+  // the ground, two slow waves: its velocity differs from yours by their sum.
+  _seedAlts(seed) {
+    this.seed = seed;
+    const rnd = mulberry32(seed);
+    for (const a of this.alts) {
+      a.t = this.t0;
+      a.amp = 0.25 + 0.6 * rnd();
+      a.w = [0, 1, 2, 3].map(() => (0.12 + 0.4 * rnd()) * Math.PI * 2);
+      a.ph = [0, 1, 2, 3].map(() => rnd() * Math.PI * 2);
+    }
+  }
+
+  // A coarse volume over the block (x, z, time) that remembers where your now has been while it
+  // leaned away from the resting now. The block itself never changes, only how much of it glows.
+  _initLit(b) {
+    const nx = this.coarse ? 40 : 56;
+    const nt = THREE.MathUtils.clamp(b.frames, 8, 48);
+    const bytes = new Uint8Array(nx * nx * nt);
+    const tex = new THREE.Data3DTexture(bytes, nx, nx, nt);
+    tex.format = THREE.RedFormat;
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+    this.textures.push(tex);
+    this.lit = { nx, nt, acc: new Float32Array(bytes.length), bytes, tex };
+    this.u.uLit.value = tex;
+    this.u.uLitMin.value.set(b.minX, b.minZ, 0);
+    this.u.uLitSize.value.set(Math.max(b.maxX - b.minX, 1e-3), Math.max(b.maxZ - b.minZ, 1e-3), b.duration);
+  }
+
+  _updateLit(dt) {
+    const { nx, nt, acc, bytes, tex } = this.lit;
+    const b = this.bounds, c = this.u.uC.value;
+    const w = b.maxX - b.minX, d = b.maxZ - b.minZ;
+    const gain = dt / LIT_RISE;
+    const plane = nx * nx;
+    for (let iz = 0; iz < nx; iz++) {
+      const z = b.minZ + ((iz + 0.5) / nx) * d;
+      for (let ix = 0; ix < nx; ix++) {
+        const x = b.minX + ((ix + 0.5) / nx) * w;
+        // how far your now leans from the resting now at this place, in seconds
+        const off = (this.beta.x * (x - this.obs.x) + this.beta.y * (z - this.obs.y)) / c;
+        const lean = Math.min(1, Math.abs(off) / (b.duration * LIT_LEAN));
+        if (lean < 0.05) continue;
+        const ft = ((this.t0 + off) / b.duration) * nt - 0.5;
+        if (ft <= -1 || ft >= nt) continue;
+        const i0 = Math.floor(ft), fr = ft - i0;
+        const cell = iz * nx + ix;
+        if (i0 >= 0) { const i = i0 * plane + cell; acc[i] = Math.min(1, acc[i] + gain * lean * (1 - fr)); }
+        if (i0 + 1 < nt) { const i = (i0 + 1) * plane + cell; acc[i] = Math.min(1, acc[i] + gain * lean * fr); }
+      }
+    }
+    const fade = Math.exp(-dt / LIT_FADE);
+    for (let i = 0; i < acc.length; i++) {
+      acc[i] *= fade;
+      bytes[i] = acc[i] * 255;
+    }
+    tex.needsUpdate = true;
+  }
+
   // tf: the time field; opts: { far, duration, c, t0 }
   open(tf, opts) {
     this._dispose();
@@ -313,6 +417,7 @@ export class UniverseLab {
     u.uSky.value = (opts.far || 25) * 0.9;
     u.uSigma.value = Math.max(b.dt * 0.75, 0.05);
     this._uploadFrames(tf);
+    this._initLit(b);
     this.t0 = opts.t0 ?? b.duration / 2;
     this.beta.set(0, 0);
     this.obs.set(0, 0);
@@ -332,13 +437,36 @@ export class UniverseLab {
     })));
 
     const additive = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending };
+    // the other yous: the same real frames, cut by the now each of them would have (see-through, and
+    // sparser on a phone; at full density their floors stay surfaces instead of breaking into rows)
+    const as = this.coarse ? ss * 2 : ss;
+    const altGrid = [];
+    for (let y = 0; y < H; y += as) for (let x = 0; x < W; x += as) altGrid.push(x, y, 0);
+    const altGeo = new THREE.BufferGeometry();
+    altGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(altGrid), 3));
+    // far enough apart that one layer's scene clears the next
+    this.altGap = 0.55 * (H / tf.focal) * Math.abs(b.minZ + b.maxZ) * 0.5;
+    this.alts = ALT_LAYERS.map((j) => {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          ...u, uStride: { value: as }, uT0: { value: 0 }, uBeta: { value: new THREE.Vector2() },
+          uLift: { value: 0 }, uAlpha: { value: 0 }, uBack: { value: 0.0015 },
+        },
+        vertexShader: SLICE_VERT, fragmentShader: POINT_FRAG, ...additive,
+      });
+      const mesh = new THREE.Points(altGeo, mat);
+      mesh.visible = false;
+      this._add(mesh);
+      return { j, t: this.t0, beta: mat.uniforms.uBeta.value, mesh };
+    });
+    this._seedAlts(0);
     // the still world's columns: its own colours through time (the stars' worldlines)
     const cols = new THREE.BufferGeometry();
     cols.setAttribute('position', new THREE.BufferAttribute(data.columns.positions, 3));
     cols.setAttribute('aColor', new THREE.BufferAttribute(data.columns.colors, 3, true));
     cols.setAttribute('aTime', new THREE.BufferAttribute(data.columns.times, 1));
     this.colMat = new THREE.ShaderMaterial({
-      uniforms: { ...u, uStride: { value: data.columns.stride }, uBaseA: { value: 0.06 }, uWarm: { value: 0.3 } },
+      uniforms: { ...u, uStride: { value: data.columns.stride }, uBaseA: { value: 0.04 }, uWarm: { value: 0.3 }, uLitA: { value: 0.16 } },
       vertexShader: HISTORY_VERT, fragmentShader: POINT_FRAG, ...additive,
     });
     this._add(new THREE.Points(cols, this.colMat));
@@ -349,7 +477,7 @@ export class UniverseLab {
     actors.setAttribute('aColor', new THREE.BufferAttribute(data.actors.colors, 3, true));
     actors.setAttribute('aTime', new THREE.BufferAttribute(data.actors.times, 1));
     this.actorMat = new THREE.ShaderMaterial({
-      uniforms: { ...u, uStride: { value: data.actors.stride }, uBaseA: { value: 0.16 }, uWarm: { value: 0.75 } },
+      uniforms: { ...u, uStride: { value: data.actors.stride }, uBaseA: { value: 0.12 }, uWarm: { value: 0.75 }, uLitA: { value: 0.5 } },
       vertexShader: HISTORY_VERT, fragmentShader: POINT_FRAG, ...additive,
     });
     this._add(new THREE.Points(actors, this.actorMat));
@@ -422,7 +550,8 @@ export class UniverseLab {
   }
 
   _resize() {
-    const w = this.root.clientWidth || window.innerWidth, h = this.root.clientHeight || window.innerHeight;
+    // (never zero, or the first camera distance comes out as NaN when the page is not laid out yet)
+    const w = this.root.clientWidth || window.innerWidth || 1, h = this.root.clientHeight || window.innerHeight || 1;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -463,6 +592,13 @@ export class UniverseLab {
       // one second of your life is gamma seconds of the clip's own time
       this.tau += dt;
       this.t0 = this._wrap(this.t0 + gamma * dt);
+      // the other yous wander off your velocity as the seed tells them, and live their own time
+      for (const a of this.alts) {
+        const nx = (Math.sin(a.w[0] * this.tau + a.ph[0]) + 0.6 * Math.sin(a.w[1] * this.tau + a.ph[1])) / 1.6;
+        const ny = (Math.sin(a.w[2] * this.tau + a.ph[2]) + 0.6 * Math.sin(a.w[3] * this.tau + a.ph[3])) / 1.6;
+        a.beta.set(this.beta.x + a.amp * nx, this.beta.y + a.amp * ny).clampLength(0, 0.95);
+        a.t = this._wrap(a.t + dt / Math.sqrt(1 - a.beta.lengthSq()));
+      }
     } else {
       // clockwork universe: a clock outside runs now on; the stick scrubs it and sets a speed along x
       this.t0 += sy * dt * (b.duration / 4);
@@ -470,10 +606,13 @@ export class UniverseLab {
       this.t0 = this.clockOn ? this._wrap(this.t0) : THREE.MathUtils.clamp(this.t0, 0, b.duration);
       this.beta.lerp(new THREE.Vector2(THREE.MathUtils.clamp(sx, -1, 1) * MAX_BETA, 0), 1 - Math.exp(-dt / 0.25));
       this.obs.lerp(new THREE.Vector2(0, 0), 1 - Math.exp(-dt / 0.5));
+      for (const a of this.alts) a.t = this.t0;
     }
     u.uT0.value = this.t0;
+    u.uNow.value = this.t0;
     u.uBeta.value.copy(this.beta);
     u.uObs.value.copy(this.obs);
+    this._updateLit(dt);
 
     // above <-> on now
     const step = dt / 1.6;
@@ -483,8 +622,19 @@ export class UniverseLab {
     this.root.classList.toggle('inside', m > 0.5);
     u.uRelief.value = RELIEF + (1 - RELIEF) * m;
     u.uK.value = this.k * (1 + 1.5 * m);
-    this.colMat.uniforms.uBaseA.value = 0.06 - 0.035 * m;
-    this.actorMat.uniforms.uBaseA.value = 0.16 - 0.06 * m;
+    // unlit history stays faint, so the glow your motion leaves reads against it; standing on now,
+    // above and below belong to the other yous, so only the glow is left of the history
+    this.colMat.uniforms.uBaseA.value = 0.04 * (1 - m);
+    this.actorMat.uniforms.uBaseA.value = 0.12 * (1 - m);
+    this.colMat.uniforms.uLitA.value = 0.16 - 0.1 * m;
+    this.actorMat.uniforms.uLitA.value = 0.5 - 0.3 * m;
+    for (const a of this.alts) {
+      const un = a.mesh.material.uniforms;
+      un.uT0.value = a.t;
+      un.uLift.value = a.j * this.altGap * m;
+      un.uAlpha.value = ALT_ALPHA[Math.abs(a.j)] * m;
+      a.mesh.visible = m > 0.02;
+    }
     this.box.material.opacity = 0.55 * (1 - m);
     this.grid.material.opacity = 0.7 * (1 - m);
     this.box.scale.y = 1 + 1.5 * m;
